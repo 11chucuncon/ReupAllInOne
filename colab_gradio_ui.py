@@ -106,6 +106,10 @@ def run_video_pipeline(
     # If user requested extract_audio, enable the ExtractAudioStep in the pipeline
     if extract_audio:
         extra_context["enable_extract_audio_step"] = True
+    else:
+        # Auto-enable ExtractAudioStep when ASR language is explicitly requested
+        if asr_language and str(asr_language).strip().lower() not in ("auto", "", "none"):
+            extra_context["enable_extract_audio_step"] = True
 
     # subtitle / translation options
     extra_context["subtitle_mode"] = (subtitle_mode or "translated").lower()
@@ -196,9 +200,21 @@ def build_interface() -> None:
                 return f"Tải về: {msg.split(':',1)[1]}"
             if msg.startswith("asr:"):
                 text = msg.split(":", 1)[1]
+                lt = text.lower()
+                if "faster" in lt or "faster-whisper" in lt:
+                    return f"ASR: Faster Whisper (timestamps) — {text[:300]}"
+                if "whisper" in lt:
+                    return f"ASR: Whisper — {text[:300]}"
+                if "google" in lt or "gcp" in lt:
+                    return f"ASR: Google Speech-to-Text — {text[:300]}"
                 return f"ASR: {text[:300]}"
             if msg.startswith("translate:"):
                 text = msg.split(":", 1)[1]
+                lt = text.lower()
+                if "google" in lt:
+                    return f"Dịch (Google): {text[:300]}"
+                if "openai" in lt or "gpt" in lt:
+                    return f"Dịch (OpenAI): {text[:300]}"
                 return f"Dịch: {text[:300]}"
             if msg.startswith("render:"):
                 status = msg.split(":", 1)[1]
@@ -317,6 +333,7 @@ def build_interface() -> None:
         with gr.Row():
             run_button = gr.Button('Run pipeline')
             extract_button = gr.Button('Extract audio only')
+            agg_button = gr.Button('Tải progress.log tổng')
         with gr.Row():
             steps_out = gr.Textbox(label='Steps log', interactive=False, lines=12)
             ffmpeg_out = gr.Textbox(label='ffmpeg log', interactive=False, lines=12)
@@ -327,6 +344,7 @@ def build_interface() -> None:
             audio_out = gr.Textbox(label='Audio path (if extracted)', interactive=False)
         with gr.Row():
             log_file = gr.File(label='Download run log')
+            agg_log_file = gr.File(label='Download tổng progress.log')
 
         run_button.click(
             fn=process_stream,
@@ -339,6 +357,18 @@ def build_interface() -> None:
             inputs=[video_input],
             outputs=[steps_out, ffmpeg_out, rendered_out, info_out, audio_out, log_file],
         )
+
+        def get_aggregate_log():
+            try:
+                repo_root = setup_repository()
+                path = repo_root / "outputs" / "progress.log"
+                if path.exists():
+                    return str(path)
+            except Exception:
+                pass
+            return None
+
+        agg_button.click(fn=get_aggregate_log, inputs=[], outputs=[agg_log_file])
 
     demo.launch(share=True)
 
