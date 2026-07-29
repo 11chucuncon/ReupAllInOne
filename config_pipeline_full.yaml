@@ -13,6 +13,10 @@ pipeline:
       config:
         output_dir: downloads
         timeout: 120
+    - name: ExtractAudioStep
+      enabled: false
+      config:
+        output_dir: outputs
     - name: ASRStep
       enabled: true
       config:

@@ -25,16 +25,35 @@ class ExtractAudioStep(BaseStep):
 
         ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
         cmd = [ffmpeg_bin, "-y", "-i", str(input_path), "-vn", "-ac", "1", "-ar", "16000", str(audio_out)]
+        progress = context.get("progress_callback")
         try:
-            completed = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if audio_out.exists():
-                context["audio_path"] = str(audio_out)
-                context["audio_extraction_status"] = "success"
-                context["audio_extraction_log"] = (completed.stdout or completed.stderr)[-2000:]
+            # stream ffmpeg output if progress callback provided
+            if callable(progress):
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                for line in proc.stdout:
+                    try:
+                        progress(f"ffmpeg-extract:{line.rstrip()}")
+                    except Exception:
+                        pass
+                proc.wait()
+                ret = proc.returncode
+                if ret == 0 and audio_out.exists():
+                    context["audio_path"] = str(audio_out)
+                    context["audio_extraction_status"] = "success"
+                else:
+                    context["audio_path"] = str(audio_out)
+                    context["audio_extraction_status"] = "failed"
+                    context["audio_extraction_error"] = f"ffmpeg exit code {ret}"
             else:
-                context["audio_path"] = str(audio_out)
-                context["audio_extraction_status"] = "failed"
-                context["audio_extraction_error"] = "ffmpeg completed but audio file not created"
+                completed = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if audio_out.exists():
+                    context["audio_path"] = str(audio_out)
+                    context["audio_extraction_status"] = "success"
+                    context["audio_extraction_log"] = (completed.stdout or completed.stderr)[-2000:]
+                else:
+                    context["audio_path"] = str(audio_out)
+                    context["audio_extraction_status"] = "failed"
+                    context["audio_extraction_error"] = "ffmpeg completed but audio file not created"
         except subprocess.CalledProcessError as exc:
             context["audio_path"] = str(audio_out)
             context["audio_extraction_status"] = "failed"

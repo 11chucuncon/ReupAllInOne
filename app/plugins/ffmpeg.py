@@ -191,23 +191,41 @@ class FFmpegStep(BaseStep):
             str(output_path.name),
         ])
 
+        progress = context.get("progress_callback")
         try:
-            completed = subprocess.run(
-                cmd,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                cwd=str(output_dir.resolve()),
-            )
-            if output_path.exists():
-                context["rendered_path"] = str(output_path)
-                context["render_status"] = "success"
-                context["render_log"] = completed.stdout[-4000:] if completed.stdout else ""
+            # stream ffmpeg output if progress callback provided
+            if callable(progress):
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=str(output_dir.resolve()))
+                for line in proc.stdout:
+                    try:
+                        progress(f"ffmpeg:{line.rstrip()}")
+                    except Exception:
+                        pass
+                proc.wait()
+                if proc.returncode == 0 and output_path.exists():
+                    context["rendered_path"] = str(output_path)
+                    context["render_status"] = "success"
+                else:
+                    context["rendered_path"] = str(output_path)
+                    context["render_status"] = "failed"
+                    context["render_error"] = f"ffmpeg exit code {proc.returncode}"
             else:
-                context["rendered_path"] = str(output_path)
-                context["render_status"] = "failed"
-                context["render_error"] = "ffmpeg completed but output file was not created"
+                completed = subprocess.run(
+                    cmd,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    cwd=str(output_dir.resolve()),
+                )
+                if output_path.exists():
+                    context["rendered_path"] = str(output_path)
+                    context["render_status"] = "success"
+                    context["render_log"] = completed.stdout[-4000:] if completed.stdout else ""
+                else:
+                    context["rendered_path"] = str(output_path)
+                    context["render_status"] = "failed"
+                    context["render_error"] = "ffmpeg completed but output file was not created"
         except subprocess.CalledProcessError as exc:
             context["rendered_path"] = str(output_path)
             context["render_status"] = "failed"

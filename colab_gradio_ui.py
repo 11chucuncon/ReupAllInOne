@@ -158,9 +158,37 @@ def build_interface() -> None:
         audio_path = ''
 
         events: list[str] = []
+        log_lines: list[str] = []
+
+        def prettify(msg: str) -> str:
+            try:
+                if msg.startswith("start:"):
+                    step = msg.split(":", 1)[1]
+                    return f"Starting step: {step}"
+                if msg.startswith("end:"):
+                    step = msg.split(":", 1)[1]
+                    return f"Finished step: {step}"
+                if msg.startswith("download:"):
+                    return f"Download status: {msg.split(':',1)[1]}"
+                if msg.startswith("asr:"):
+                    text = msg.split(":", 1)[1]
+                    return f"ASR result: {text[:300]}"
+                if msg.startswith("translate:"):
+                    text = msg.split(":", 1)[1]
+                    return f"Translation: {text[:300]}"
+                if msg.startswith("render:"):
+                    status = msg.split(":", 1)[1]
+                    return f"Render status: {status}"
+                if msg.startswith("ffmpeg-extract:"):
+                    return f"ffmpeg (extract): {msg.split(':',1)[1]}"
+                if msg.startswith("ffmpeg:"):
+                    return f"ffmpeg: {msg.split(':',1)[1]}"
+            except Exception:
+                pass
+            return msg
 
         def progress_cb(message: str) -> None:
-            # normalize message and append
+            # append raw message to events; prettify when consuming
             events.append(message)
 
         result_container: dict = {}
@@ -183,12 +211,14 @@ def build_interface() -> None:
         thread = threading.Thread(target=target, daemon=True)
         thread.start()
 
-        # stream events while thread runs
+        # stream events while thread runs; accumulate prettified log
         while thread.is_alive() or events:
             while events:
                 ev = events.pop(0)
-                # yield event string into status box (others empty until final)
-                yield ev, '', '', audio_path
+                pretty = prettify(ev)
+                log_lines.append(pretty)
+                # yield accumulated log into the status textbox
+                yield "\n".join(log_lines), '', '', audio_path
             time.sleep(0.2)
 
         # final result
@@ -210,7 +240,7 @@ def build_interface() -> None:
             run_button = gr.Button('Run pipeline')
             extract_button = gr.Button('Extract audio only')
         with gr.Row():
-            status_out = gr.Textbox(label='Render status', interactive=False)
+            status_out = gr.Textbox(label='Progress log', interactive=False, lines=12)
         with gr.Row():
             rendered_out = gr.Textbox(label='Rendered output path', interactive=False)
         with gr.Row():
