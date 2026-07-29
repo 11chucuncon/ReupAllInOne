@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from app.plugins.base import BaseStep
+import wave
+from pathlib import Path
 
 
 def _secs_to_srt(ts: float) -> str:
@@ -33,10 +35,34 @@ class SubtitleStep(BaseStep):
 
     def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
         config = self.config or {}
-        translation_target = context.get("translation_target") or config.get("target")
+        # accept multiple possible keys for translation target
+        translation_target = (
+            context.get("translation_target")
+            or context.get("translation_target_language")
+            or context.get("target_language")
+            or config.get("target")
+        )
         asr = context.get("asr_result") or {}
         timestamps: List[Dict[str, Any]] = asr.get("timestamps", [])
         audio_path = asr.get("audio_path")
+        preserve_timing = context.get("preserve_timing") or config.get("preserve_timing") or False
+
+        # helper: get audio duration if available for clamping
+        def _audio_duration(path: str | None) -> float | None:
+            if not path:
+                return None
+            try:
+                p = Path(path)
+                if p.suffix.lower() == ".wav":
+                    with wave.open(str(p), "rb") as wf:
+                        frames = wf.getnframes()
+                        rate = wf.getframerate()
+                        return frames / float(rate) if rate else None
+            except Exception:
+                return None
+            return None
+
+        audio_duration = _audio_duration(audio_path)
 
         if not timestamps:
             context["subtitle_result"] = {"status": "no_timestamps", "srt_path": None}
@@ -44,9 +70,18 @@ class SubtitleStep(BaseStep):
 
         # prepare srt lines
         srt_lines: List[str] = []
+        MIN_SEG_DUR = 0.4
         for idx, seg in enumerate(timestamps, start=1):
             start = float(seg.get("start", 0.0))
             end = float(seg.get("end", start + 4.0))
+            # ensure minimal duration
+            if end <= start + MIN_SEG_DUR:
+                end = start + MIN_SEG_DUR
+            # clamp to audio duration if known
+            if audio_duration is not None and end > audio_duration:
+                end = audio_duration
+            if start >= end:
+                start = max(0.0, end - MIN_SEG_DUR)
             text = seg.get("text", "")
             if translation_target:
                 text = _translate_text(text, translation_target)
@@ -55,9 +90,11 @@ class SubtitleStep(BaseStep):
             srt_lines.append(text)
             srt_lines.append("")
 
-        # decide output path
-        out_dir = Path(audio_path).parent if audio_path else Path.cwd()
-        out_dir = out_dir / "outputs"
+        # decide output path: save SRT next to audio file (or repo outputs)
+        if audio_path:
+            out_dir = Path(audio_path).parent
+        else:
+            out_dir = Path.cwd() / "outputs"
         out_dir.mkdir(parents=True, exist_ok=True)
         srt_name = (Path(audio_path).stem if audio_path else "subtitles")
         tgt = f".{translation_target}" if translation_target else ""

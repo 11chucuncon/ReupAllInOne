@@ -43,45 +43,106 @@ def _transcribe_with_faster_whisper(*args, **kwargs):
 
 def _get_audio_duration(path: Path) -> float | None:
     try:
-        ffprobe = shutil.which("ffprobe")
-        if not ffprobe:
-            # try to use imageio_ffmpeg to get ffmpeg path as a fallback
+        # Prefer Python-native WAV duration for extracted WAV files
+        if path.suffix.lower() == ".wav":
             try:
-                import imageio_ffmpeg as iioff
+                import wave
 
-                ffprobe = iioff.get_ffmpeg_exe()
+                with wave.open(str(path), "rb") as wf:
+                    frames = wf.getnframes()
+                    rate = wf.getframerate()
+                    return frames / float(rate) if rate else None
             except Exception:
-                return None
+                pass
 
-        cmd = [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
-        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
-        return float(out)
+        # Fallback: try ffprobe (if available)
+        ffprobe = shutil.which("ffprobe")
+        if ffprobe:
+            cmd = [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
+            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+            return float(out)
+
+        # Last resort: try imageio_ffmpeg's ffmpeg exe to probe via ffmpeg -i output parsing (not ideal)
+        try:
+            import imageio_ffmpeg as iioff
+
+            ffmpeg_exe = iioff.get_ffmpeg_exe()
+            if ffmpeg_exe:
+                cmd = [ffmpeg_exe, "-i", str(path)]
+                out = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode()
+                for line in out.splitlines():
+                    if "Duration:" in line:
+                        # parse Duration: 00:00:03.08
+                        try:
+                            part = line.split("Duration:", 1)[1].split(",", 1)[0].strip()
+                            h, m, s = part.split(":")
+                            secs = int(h) * 3600 + int(m) * 60 + float(s)
+                            return secs
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+
     except Exception:
-        return None
+        pass
+    return None
 
 
-def _approximate_segments_from_text(text: str, duration: float | None, max_segment_len: float = 5.0) -> List[Dict[str, Any]]:
+def _approximate_segments_from_text(text: str, duration: float | None, target_segment_secs: float = 4.0) -> List[Dict[str, Any]]:
     words = text.split()
     if not words:
         return []
     total_words = len(words)
     if duration and duration > 0:
-        n_segments = max(1, int(duration // max_segment_len) + 1)
+        # determine number of segments by target seconds
+        import math
+
+        n_segments = max(1, math.ceil(duration / target_segment_secs))
+        # estimate words per second and words per segment
+        wps = total_words / duration if duration and total_words else max(0.5, total_words / (n_segments * target_segment_secs))
+        words_per_segment = max(1, int(round(wps * target_segment_secs)))
+        segments = []
+        idx = 0
+        # map words to timestamps proportionally
+        if duration and total_words:
+            # compute time position per word
+            time_per_word = duration / total_words
+            for i in range(n_segments):
+                if idx >= total_words:
+                    break
+                seg_word_count = min(words_per_segment, total_words - idx)
+                start = idx * time_per_word
+                end = (idx + seg_word_count) * time_per_word
+                seg_words = words[idx: idx + seg_word_count]
+                idx += seg_word_count
+                segments.append({"start": float(start), "end": float(end), "text": " ".join(seg_words)})
+            if idx < total_words:
+                # append remaining words to last segment
+                segments[-1]["text"] = segments[-1]["text"] + " " + " ".join(words[idx:])
+        else:
+            # fallback: split by words into roughly target word chunks
+            words_per_segment = max(1, total_words // n_segments)
+            idx = 0
+            for i in range(n_segments):
+                seg_words = words[idx: idx + words_per_segment]
+                idx += words_per_segment
+                segments.append({"start": float(i * target_segment_secs), "end": float((i + 1) * target_segment_secs), "text": " ".join(seg_words)})
+            if idx < total_words:
+                segments[-1]["text"] = segments[-1]["text"] + " " + " ".join(words[idx:])
+        return segments
     else:
-        # fallback: create segments of about 10 words each
+        # duration unknown: split approx every 10 words
         n_segments = max(1, total_words // 10)
-    words_per_segment = max(1, total_words // n_segments)
-    segments: List[Dict[str, Any]] = []
-    idx = 0
-    for i in range(n_segments):
-        start = float(i * max_segment_len)
-        end = float((i + 1) * max_segment_len) if duration is None else float(min((i + 1) * max_segment_len, duration))
-        seg_words = words[idx: idx + words_per_segment]
-        idx += words_per_segment
-        segments.append({"start": start, "end": end, "text": " ".join(seg_words)})
-    if idx < total_words:
-        segments[-1]["text"] = segments[-1]["text"] + " " + " ".join(words[idx:])
-    return segments
+        words_per_segment = max(1, total_words // n_segments)
+        segments = []
+        idx = 0
+        for i in range(n_segments):
+            seg_words = words[idx: idx + words_per_segment]
+            idx += words_per_segment
+            segments.append({"start": float(i * target_segment_secs), "end": float((i + 1) * target_segment_secs), "text": " ".join(seg_words)})
+        if idx < total_words:
+            segments[-1]["text"] = segments[-1]["text"] + " " + " ".join(words[idx:])
+        return segments
 
 
 class ASRStep(BaseStep):
