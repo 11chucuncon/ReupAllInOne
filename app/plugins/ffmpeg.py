@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -9,26 +10,38 @@ from typing import Any, Dict
 from app.plugins.base import BaseStep
 
 
-def _candidate_ffmpeg_paths() -> list[str]:
-    candidates = []
+def _resolve_ffmpeg_path() -> str | None:
+    if shutil.which("ffmpeg"):
+        return shutil.which("ffmpeg")
+
     for env_name in ("FFMPEG_BIN", "FFMPEG_PATH"):
         value = os.getenv(env_name)
-        if value:
-            candidates.append(value)
+        if value and Path(value).exists():
+            return value
+
+    if importlib.util.find_spec("imageio_ffmpeg") is not None:
+        try:
+            import imageio_ffmpeg
+
+            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+            if ffmpeg_exe and Path(ffmpeg_exe).exists():
+                return str(ffmpeg_exe)
+        except Exception:
+            pass
 
     if os.name == "nt":
-        candidates.extend([
+        candidates = [
             r"C:\ffmpeg\bin\ffmpeg.exe",
             r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
             r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
-        ])
+        ]
     else:
-        candidates.extend([
+        candidates = [
             "/usr/bin/ffmpeg",
             "/usr/local/bin/ffmpeg",
             "/opt/conda/bin/ffmpeg",
             "/usr/local/opt/ffmpeg/bin/ffmpeg",
-        ])
+        ]
 
     try:
         repo_root = Path(__file__).resolve().parents[2]
@@ -39,7 +52,11 @@ def _candidate_ffmpeg_paths() -> list[str]:
     except Exception:
         pass
 
-    return candidates
+    for candidate in candidates:
+        if Path(candidate).exists():
+            return candidate
+
+    return None
 
 
 class FFmpegStep(BaseStep):
@@ -135,12 +152,7 @@ class FFmpegStep(BaseStep):
             context["render_error"] = f"Input file not found: {input_path}"
             return context
 
-        ffmpeg_path = shutil.which("ffmpeg")
-        if not ffmpeg_path:
-            for candidate in _candidate_ffmpeg_paths():
-                if Path(candidate).exists():
-                    ffmpeg_path = candidate
-                    break
+        ffmpeg_path = _resolve_ffmpeg_path()
 
         if not ffmpeg_path:
             context["rendered_path"] = str(output_path)

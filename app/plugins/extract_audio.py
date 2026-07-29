@@ -1,11 +1,35 @@
 from __future__ import annotations
 
+import importlib.util
+import os
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Dict
 
 from app.plugins.base import BaseStep
+
+
+def _resolve_ffmpeg_path() -> str | None:
+    if shutil.which("ffmpeg"):
+        return shutil.which("ffmpeg")
+
+    for env_name in ("FFMPEG_BIN", "FFMPEG_PATH"):
+        value = Path(os.getenv(env_name, ""))
+        if value and value.exists():
+            return str(value)
+
+    if importlib.util.find_spec("imageio_ffmpeg") is not None:
+        try:
+            import imageio_ffmpeg
+
+            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+            if ffmpeg_exe and Path(ffmpeg_exe).exists():
+                return str(ffmpeg_exe)
+        except Exception:
+            pass
+
+    return None
 
 
 class ExtractAudioStep(BaseStep):
@@ -23,7 +47,13 @@ class ExtractAudioStep(BaseStep):
             context["audio_extraction_error"] = f"Input file not found: {input_path}"
             return context
 
-        ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+        ffmpeg_bin = _resolve_ffmpeg_path()
+        if not ffmpeg_bin:
+            context["audio_path"] = str(audio_out)
+            context["audio_extraction_status"] = "failed"
+            context["audio_extraction_error"] = "ffmpeg executable not found"
+            return context
+
         cmd = [ffmpeg_bin, "-y", "-i", str(input_path), "-vn", "-ac", "1", "-ar", "16000", str(audio_out)]
         progress = context.get("progress_callback")
         try:
