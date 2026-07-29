@@ -1,0 +1,16 @@
+pipeline:
+  steps:
+    - name: DownloadStep
+      enabled: true
+    - name: ASRStep
+      enabled: true
+    - name: OCRStep
+      enabled: false
+    - name: TranslateStep
+      enabled: true
+    - name: TTSStep
+      enabled: true
+    - name: FFmpegStep
+      enabled: true
+    - name: WatermarkStep
+      enabled: false

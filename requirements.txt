@@ -1,0 +1,5 @@
+pytest>=8.0.0
+celery>=5.4.0
+redis>=5.0.0
+PyYAML>=6.0.0
+yt-dlp>=2024.12.0

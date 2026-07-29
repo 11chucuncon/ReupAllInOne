@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.py[cod]
+*.log
+.ipynb_checkpoints/
+outputs/
+downloads/
+ffmpeg.zip
+ffmpeg_bin/
+ffmpeg_portable.7z
+final.mp4
+*.sqlite*
+*.db
+.vscode/

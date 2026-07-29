@@ -1,0 +1,41 @@
+pipeline:
+  metadata:
+    name: video-processing-pipeline
+    description: Full pipeline for download, ASR, OCR, translation, TTS, and rendering
+  steps:
+    - name: DownloadStep
+      enabled: true
+      config:
+        output_dir: downloads
+    - name: ASRStep
+      enabled: true
+      config:
+        language: auto
+    - name: OCRStep
+      enabled: true
+      config:
+        crop_bottom_ratio: 0.15
+    - name: TranslateStep
+      enabled: true
+      config:
+        target_language: vi
+    - name: TranslationStep
+      enabled: true
+      config:
+        provider: openrouter
+        target_language: vi
+        model: google/gemini-2.5-flash-lite
+        api_key: ${OPENROUTER_API_KEY}
+        enabled: true
+    - name: TTSStep
+      enabled: true
+      config:
+        voice: default
+    - name: FFmpegStep
+      enabled: true
+      config:
+        output_dir: outputs
+    - name: WatermarkStep
+      enabled: false
+      config:
+        logo_path: assets/logo.png
