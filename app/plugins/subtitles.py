@@ -20,13 +20,53 @@ def _translate_text(text: str, target: str) -> str:
     # Minimal pluggable translator: real models can be integrated here.
     if not target or target == "auto":
         return text
+    # Preference order: OpenAI (if key), DeepL (if key), deep_translator fallback
+    import os
+
+    provider = os.environ.get("SUBTITLE_TRANSLATOR_PROVIDER", "auto").lower()
+
+    # Try OpenAI chat completion for high-quality contextual translation
     try:
-        # try to use any available translator library (example: transformers/argos)
+        if provider in ("openai", "auto") and os.environ.get("OPENAI_API_KEY"):
+            import openai
+
+            openai.api_key = os.environ.get("OPENAI_API_KEY")
+            system = {
+                "role": "system",
+                "content": "You are a professional translator. Translate the user's text into the target language exactly, preserving meaning and punctuation. Respond with only the translated text."
+            }
+            user = {"role": "user", "content": f"Translate to {target}: {text}"}
+            try:
+                resp = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[system, user], max_tokens=2000)
+                t = resp.choices[0].message.content.strip()
+                if t:
+                    return t
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Try DeepL if configured
+    try:
+        if provider in ("deepl", "auto") and (os.environ.get("DEEPL_AUTH_KEY") or os.environ.get("DEEPL_API_KEY")):
+            try:
+                import deepl
+
+                auth_key = os.environ.get("DEEPL_AUTH_KEY") or os.environ.get("DEEPL_API_KEY")
+                translator = deepl.Translator(auth_key)
+                translated = translator.translate_text(text, target_lang=target.upper())
+                return translated.text
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Fallback: deep_translator GoogleTranslator if installed
+    try:
         from deep_translator import GoogleTranslator
 
         return GoogleTranslator(source="auto", target=target).translate(text)
     except Exception:
-        # fallback: mark text as translated but keep original
         return f"[{target}] " + text
 
 
