@@ -58,28 +58,9 @@ def run_video_pipeline(
 
     extra_context: dict = {}
 
-    # optional: extract audio using ffmpeg and pass audio_path into pipeline
+    # If user requested extract_audio, enable the ExtractAudioStep in the pipeline
     if extract_audio:
-        outputs_dir = repo_root / "outputs"
-        outputs_dir.mkdir(parents=True, exist_ok=True)
-        audio_out = outputs_dir / "audio.wav"
-        try:
-            subprocess.run([
-                shutil.which("ffmpeg") or "ffmpeg",
-                "-y",
-                "-i",
-                str(input_path),
-                "-vn",
-                "-ac",
-                "1",
-                "-ar",
-                "16000",
-                str(audio_out),
-            ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            extra_context["audio_path"] = str(audio_out.resolve())
-        except Exception as exc:
-            # continue but record failure in context
-            extra_context["audio_extraction_error"] = str(exc)
+        extra_context["enable_extract_audio_step"] = True
 
     # subtitle / translation options
     extra_context["subtitle_mode"] = (subtitle_mode or "translated").lower()
@@ -158,38 +139,57 @@ def build_interface() -> None:
         audio_path = ''
 
         events: list[str] = []
-        log_lines: list[str] = []
+        step_lines: list[str] = []
+        ffmpeg_lines: list[str] = []
 
         def prettify(msg: str) -> str:
             try:
                 if msg.startswith("start:"):
                     step = msg.split(":", 1)[1]
-                    return f"Starting step: {step}"
+                    return f"Bắt đầu: {step}"
                 if msg.startswith("end:"):
                     step = msg.split(":", 1)[1]
-                    return f"Finished step: {step}"
+                    return f"Kết thúc: {step}"
                 if msg.startswith("download:"):
-                    return f"Download status: {msg.split(':',1)[1]}"
+                    return f"Tải về: {msg.split(':',1)[1]}"
                 if msg.startswith("asr:"):
                     text = msg.split(":", 1)[1]
-                    return f"ASR result: {text[:300]}"
+                    return f"ASR: {text[:300]}"
                 if msg.startswith("translate:"):
                     text = msg.split(":", 1)[1]
-                    return f"Translation: {text[:300]}"
+                    return f"Dịch: {text[:300]}"
                 if msg.startswith("render:"):
                     status = msg.split(":", 1)[1]
-                    return f"Render status: {status}"
+                    if status.strip().lower() == "success":
+                        return "Kết xuất: Thành công"
+                    return f"Kết xuất: {status}"
                 if msg.startswith("ffmpeg-extract:"):
-                    return f"ffmpeg (extract): {msg.split(':',1)[1]}"
+                    return f"ffmpeg (tách audio): {msg.split(':',1)[1]}"
                 if msg.startswith("ffmpeg:"):
                     return f"ffmpeg: {msg.split(':',1)[1]}"
             except Exception:
                 pass
             return msg
 
+        repo_root_local = None
+        try:
+            repo_root_local = setup_repository()
+            (repo_root_local / "outputs").mkdir(parents=True, exist_ok=True)
+        except Exception:
+            repo_root_local = None
+
         def progress_cb(message: str) -> None:
             # append raw message to events; prettify when consuming
             events.append(message)
+            # write prettified log to outputs/progress.log if repo available
+            try:
+                pretty = prettify(message)
+                if repo_root_local is not None:
+                    log_path = repo_root_local / "outputs" / "progress.log"
+                    with open(log_path, "a", encoding="utf-8") as fh:
+                        fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {pretty}\n")
+            except Exception:
+                pass
 
         result_container: dict = {}
 
@@ -211,19 +211,21 @@ def build_interface() -> None:
         thread = threading.Thread(target=target, daemon=True)
         thread.start()
 
-        # stream events while thread runs; accumulate prettified log
+        # stream events while thread runs; accumulate prettified log into step and ffmpeg panels
         while thread.is_alive() or events:
             while events:
                 ev = events.pop(0)
-                pretty = prettify(ev)
-                log_lines.append(pretty)
-                # yield accumulated log into the status textbox
-                yield "\n".join(log_lines), '', '', audio_path
+                if ev.startswith("ffmpeg"):
+                    ffmpeg_lines.append(ev.split(":", 1)[1])
+                else:
+                    step_lines.append(prettify(ev))
+                # yield accumulated logs into the two textboxes
+                yield "\n".join(step_lines), "\n".join(ffmpeg_lines), '', '', audio_path
             time.sleep(0.2)
 
         # final result
         status, output_path, message = result_container.get('result', ('error', '', 'No result'))
-        yield status, output_path, message, audio_path
+        yield "\n".join(step_lines), "\n".join(ffmpeg_lines), output_path, message, audio_path
 
     with gr.Blocks() as demo:
         gr.Markdown('# Video Pipeline Colab UI')
@@ -240,10 +242,10 @@ def build_interface() -> None:
             run_button = gr.Button('Run pipeline')
             extract_button = gr.Button('Extract audio only')
         with gr.Row():
-            status_out = gr.Textbox(label='Progress log', interactive=False, lines=12)
+            steps_out = gr.Textbox(label='Steps log', interactive=False, lines=12)
+            ffmpeg_out = gr.Textbox(label='ffmpeg log', interactive=False, lines=12)
         with gr.Row():
             rendered_out = gr.Textbox(label='Rendered output path', interactive=False)
-        with gr.Row():
             info_out = gr.Textbox(label='Info / Drive copy status', interactive=False)
         with gr.Row():
             audio_out = gr.Textbox(label='Audio path (if extracted)', interactive=False)
@@ -251,13 +253,13 @@ def build_interface() -> None:
         run_button.click(
             fn=process_stream,
             inputs=[video_input, extract_chk, subs_chk, subtitle_mode, translation_target, asr_lang],
-            outputs=[status_out, rendered_out, info_out, audio_out],
+            outputs=[steps_out, ffmpeg_out, rendered_out, info_out, audio_out],
         )
 
         extract_button.click(
             fn=extract_audio_only,
             inputs=[video_input],
-            outputs=[status_out, rendered_out, info_out, audio_out],
+            outputs=[steps_out, ffmpeg_out, rendered_out, info_out, audio_out],
         )
 
     demo.launch(share=True)

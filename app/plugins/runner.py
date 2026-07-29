@@ -58,6 +58,27 @@ def run_from_config(
     progress_callback: None | callable = None,
 ) -> Dict[str, Any]:
     config = load_plugin_config(config_path)
+    # allow extra_context to modify pipeline config before building
+    if extra_context:
+        enable_extract = extra_context.get("enable_extract_audio_step") or extra_context.get("extract_audio")
+        if enable_extract:
+            steps = config.get("pipeline", {}).get("steps", [])
+            found = False
+            for step in steps:
+                if step.get("name") == "ExtractAudioStep":
+                    step["enabled"] = True
+                    found = True
+                    break
+            if not found:
+                # insert before ASRStep if present, otherwise append
+                insert_idx = 0
+                for i, step in enumerate(steps):
+                    if step.get("name") == "ASRStep":
+                        insert_idx = i
+                        break
+                steps.insert(insert_idx, {"name": "ExtractAudioStep", "enabled": True, "config": {"output_dir": "outputs"}})
+            config.setdefault("pipeline", {})["steps"] = steps
+
     pipeline = build_pipeline_from_config(config)
     input_value = video_url or "https://example.com/video"
     initial_context: Dict[str, Any] = {"url": input_value, "output_dir": "outputs"}
