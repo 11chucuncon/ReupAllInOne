@@ -15,6 +15,7 @@ from app.plugins.translate import TranslateStep
 from app.plugins.translation import TranslationStep
 from app.plugins.tts import TTSStep
 from app.plugins.watermark import WatermarkStep
+from app.plugins.extract_audio import ExtractAudioStep
 
 
 def load_plugin_config(config_path: str | Path = "config_pipeline_full.yaml") -> Dict[str, Any]:
@@ -28,6 +29,7 @@ def load_plugin_config(config_path: str | Path = "config_pipeline_full.yaml") ->
 def build_pipeline_from_config(config: Dict[str, Any]) -> VideoPipeline:
     registry = {
         "DownloadStep": DownloadStep(),
+        "ExtractAudioStep": ExtractAudioStep(),
         "TranslateStep": TranslateStep(),
         "TranslationStep": TranslationStep(),
         "WatermarkStep": WatermarkStep(),
@@ -53,6 +55,7 @@ def run_from_config(
     config_path: str | Path = "config_pipeline_full.yaml",
     video_url: str | None = None,
     extra_context: Dict[str, Any] | None = None,
+    progress_callback: None | callable = None,
 ) -> Dict[str, Any]:
     config = load_plugin_config(config_path)
     pipeline = build_pipeline_from_config(config)
@@ -65,4 +68,6 @@ def run_from_config(
     if extra_context:
         # merge extra context into initial context (overrides keys)
         initial_context.update(extra_context)
+    if progress_callback is not None:
+        initial_context["progress_callback"] = progress_callback
     return pipeline.run(initial_context)

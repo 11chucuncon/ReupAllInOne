@@ -5,6 +5,9 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+import threading
+import time
+from typing import Callable
 
 
 def install_dependencies() -> None:
@@ -21,51 +24,6 @@ def mount_drive() -> None:
         drive.mount('/content/drive', force_remount=False)
     except Exception as exc:
         print('Drive mount skipped or already mounted:', exc)
-
-
-def find_repo_root() -> Path | None:
-    candidates = [
-        Path.cwd(),
-        Path('/content/project'),
-        Path('/content/video-pipeline'),
-        Path('/content/drive/MyDrive/A'),
-        Path('/content/drive/MyDrive/video-pipeline'),
-        Path('/content/drive/My Drive/A'),
-        Path('/content/drive/My Drive/video-pipeline'),
-    ]
-    for candidate in candidates:
-        if (candidate / 'app' / 'plugins' / 'runner.py').exists():
-            return candidate
-    return None
-
-
-def clone_repo_if_needed() -> Path:
-    repo_root = Path('/content/project')
-    if (repo_root / 'app' / 'plugins' / 'runner.py').exists():
-        return repo_root
-
-    if repo_root.exists():
-        shutil.rmtree(repo_root, ignore_errors=True)
-
-    for url in ['https://github.com/hanhwannau/A.git', 'https://github.com/hanhwannau/A']:
-        for branch in ['master', 'main']:
-            print(f'Trying {url} branch {branch}...')
-            try:
-                subprocess.run(
-                    ['git', 'clone', '--depth', '1', '--branch', branch, url, str(repo_root)],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                print('Clone succeeded')
-                return repo_root
-            except subprocess.CalledProcessError as exc:
-                print('Clone failed:', exc.returncode)
-                print('stdout:', exc.stdout)
-                print('stderr:', exc.stderr)
-
-    raise RuntimeError('Failed to clone repository from GitHub. Check connectivity/authentication and whether the repo is public.')
-
 
 def setup_repository() -> Path:
     repo_root = find_repo_root()
@@ -89,6 +47,7 @@ def run_video_pipeline(
     subtitle_mode: str = "translated",
     translation_target: str | None = None,
     asr_language: str | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[str, str, str]:
     repo_root = setup_repository()
     from app.plugins.runner import run_from_config
@@ -129,7 +88,7 @@ def run_video_pipeline(
     if asr_language:
         extra_context["asr_language"] = asr_language
 
-    result = run_from_config("config_pipeline_full.yaml", video_url=str(input_path.resolve()), extra_context=extra_context)
+    result = run_from_config("config_pipeline_full.yaml", video_url=str(input_path.resolve()), extra_context=extra_context, progress_callback=progress_callback)
     rendered_path = Path(result.get("rendered_path", "outputs/final.mp4"))
     if not rendered_path.is_absolute():
         rendered_path = (repo_root / rendered_path).resolve()
@@ -153,55 +112,125 @@ def run_video_pipeline(
 
 def build_interface() -> None:
     import gradio as gr
+    def extract_audio_only(video_file: str | Path | None) -> tuple[str, str, str, str]:
+        try:
+            if video_file is None:
+                return 'no-input', '', 'Please upload a video file.', ''
+            repo_root = setup_repository()
+            input_path = Path(str(video_file))
+            outputs_dir = repo_root / "outputs"
+            outputs_dir.mkdir(parents=True, exist_ok=True)
+            audio_out = outputs_dir / "audio.wav"
+            try:
+                subprocess.run([
+                    shutil.which("ffmpeg") or "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(input_path),
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "16000",
+                    str(audio_out),
+                ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                return 'audio_extracted', '', f'Audio extracted: {audio_out}', str(audio_out)
+            except Exception as exc:
+                return 'error', '', f'Audio extraction failed: {exc}', ''
+        except Exception as exc:
+            return 'error', '', str(exc), ''
 
-    def process(
+    def process_stream(
         video_file: str | Path | None,
         extract_audio: bool,
         generate_subtitles: bool,
         subtitle_mode: str,
         translation_target: str,
         asr_language: str,
-    ) -> tuple[str, str, str]:
-        try:
-            if video_file is None:
-                return 'No video uploaded', '', 'Please upload a video file.'
+    ):
+        # generator that streams progress updates via a background thread
+        if video_file is None:
+            yield 'No video uploaded', '', '', ''
+            return
 
-            video_path = str(video_file)
-            status, output_path, message = run_video_pipeline(
-                video_path,
-                extract_audio=extract_audio,
-                generate_subtitles=generate_subtitles,
-                subtitle_mode=subtitle_mode,
-                translation_target=translation_target or None,
-                asr_language=asr_language or None,
-            )
-            return status, output_path, message
-        except Exception as exc:
-            return 'error', '', str(exc)
+        yield 'Starting pipeline...', '', '', ''
 
-    inputs = [
-        gr.File(label='Upload video file', file_count='single', type='filepath'),
-        gr.Checkbox(label='Extract audio (wav)', value=False),
-        gr.Checkbox(label='Generate subtitles', value=True),
-        gr.Radio(['translated', 'source'], label='Subtitle mode', value='translated'),
-        gr.Dropdown(['auto','en','vi','zh','fr','es'], label='Translation target language', value='vi'),
-        gr.Textbox(label='ASR language (e.g. en, vi) or "auto"', value='auto'),
-    ]
-    outputs = [
-        gr.Textbox(label='Render status', interactive=False),
-        gr.Textbox(label='Rendered output path', interactive=False),
-        gr.Textbox(label='Info / Drive copy status', interactive=False),
-    ]
+        audio_path = ''
 
-    iface = gr.Interface(
-        fn=process,
-        inputs=inputs,
-        outputs=outputs,
-        title='Video Pipeline Colab UI',
-        description='Upload a video and click Run. The pipeline will execute on Colab and return the rendered video path.',
-    )
+        events: list[str] = []
 
-    iface.launch(share=True)
+        def progress_cb(message: str) -> None:
+            # normalize message and append
+            events.append(message)
+
+        result_container: dict = {}
+
+        def target() -> None:
+            try:
+                status, output_path, message = run_video_pipeline(
+                    str(video_file),
+                    extract_audio=False,
+                    generate_subtitles=generate_subtitles,
+                    subtitle_mode=subtitle_mode,
+                    translation_target=translation_target or None,
+                    asr_language=asr_language or None,
+                    progress_callback=progress_cb,
+                )
+                result_container['result'] = (status, output_path, message)
+            except Exception as exc:
+                result_container['result'] = ('error', '', str(exc))
+
+        thread = threading.Thread(target=target, daemon=True)
+        thread.start()
+
+        # stream events while thread runs
+        while thread.is_alive() or events:
+            while events:
+                ev = events.pop(0)
+                # yield event string into status box (others empty until final)
+                yield ev, '', '', audio_path
+            time.sleep(0.2)
+
+        # final result
+        status, output_path, message = result_container.get('result', ('error', '', 'No result'))
+        yield status, output_path, message, audio_path
+
+    with gr.Blocks() as demo:
+        gr.Markdown('# Video Pipeline Colab UI')
+        with gr.Row():
+            video_input = gr.File(label='Upload video file', file_count='single', type='filepath')
+        with gr.Row():
+            extract_chk = gr.Checkbox(label='Extract audio (wav)', value=False)
+            subs_chk = gr.Checkbox(label='Generate subtitles', value=True)
+            subtitle_mode = gr.Radio(['translated', 'source'], label='Subtitle mode', value='translated')
+        with gr.Row():
+            translation_target = gr.Dropdown(['auto','en','vi','zh','fr','es'], label='Translation target language', value='vi')
+            asr_lang = gr.Textbox(label='ASR language (e.g. en, vi) or "auto"', value='auto')
+        with gr.Row():
+            run_button = gr.Button('Run pipeline')
+            extract_button = gr.Button('Extract audio only')
+        with gr.Row():
+            status_out = gr.Textbox(label='Render status', interactive=False)
+        with gr.Row():
+            rendered_out = gr.Textbox(label='Rendered output path', interactive=False)
+        with gr.Row():
+            info_out = gr.Textbox(label='Info / Drive copy status', interactive=False)
+        with gr.Row():
+            audio_out = gr.Textbox(label='Audio path (if extracted)', interactive=False)
+
+        run_button.click(
+            fn=process_stream,
+            inputs=[video_input, extract_chk, subs_chk, subtitle_mode, translation_target, asr_lang],
+            outputs=[status_out, rendered_out, info_out, audio_out],
+        )
+
+        extract_button.click(
+            fn=extract_audio_only,
+            inputs=[video_input],
+            outputs=[status_out, rendered_out, info_out, audio_out],
+        )
+
+    demo.launch(share=True)
 
 
 if __name__ == '__main__':
