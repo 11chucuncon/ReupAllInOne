@@ -34,6 +34,10 @@ pipeline:
       config:
         target_language: vi
         preserve_timing: true
+    - name: SubtitleStep
+      enabled: true
+      config:
+        target: vi
     - name: TranslationStep
       enabled: true
       config:

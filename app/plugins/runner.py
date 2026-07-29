@@ -16,6 +16,7 @@ from app.plugins.translation import TranslationStep
 from app.plugins.tts import TTSStep
 from app.plugins.watermark import WatermarkStep
 from app.plugins.extract_audio import ExtractAudioStep
+from app.plugins.subtitles import SubtitleStep
 
 
 def load_plugin_config(config_path: str | Path = "config_pipeline_full.yaml") -> Dict[str, Any]:
@@ -31,6 +32,7 @@ def build_pipeline_from_config(config: Dict[str, Any]) -> VideoPipeline:
         "DownloadStep": DownloadStep(),
         "ExtractAudioStep": ExtractAudioStep(),
         "TranslateStep": TranslateStep(),
+        "SubtitleStep": SubtitleStep(),
         "TranslationStep": TranslationStep(),
         "WatermarkStep": WatermarkStep(),
         "ASRStep": ASRStep(),

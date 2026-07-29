@@ -93,7 +93,7 @@ def run_video_pipeline(
     translation_target: str | None = None,
     asr_language: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str | None]:
     repo_root = setup_repository()
     from app.plugins.runner import run_from_config
 
@@ -137,7 +137,16 @@ def run_video_pipeline(
             output_message = f"Output saved locally at {rendered_path}, but could not copy to Drive: {exc}"
     else:
         output_message = f"Output saved locally at {rendered_path}"
-    return result.get("render_status", "unknown"), str(rendered_path), output_message
+    srt_path = None
+    try:
+        srt_path = result.get("subtitle_result", {}).get("srt_path")
+        if srt_path:
+            # normalize to absolute if relative
+            srt_path = str((repo_root / srt_path).resolve()) if not Path(srt_path).is_absolute() else str(srt_path)
+    except Exception:
+        srt_path = None
+
+    return result.get("render_status", "unknown"), str(rendered_path), output_message, srt_path
 
 
 def build_interface() -> None:
@@ -171,9 +180,9 @@ def build_interface() -> None:
                     fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - Tách audio: {audio_out}\n")
             except Exception:
                 run_log = None
-            return "Tách audio xong", "", "", f"Audio extracted: {audio_out}", str(audio_out), str(run_log) if run_log is not None else None
+            return "Tách audio xong", "", "", f"Audio extracted: {audio_out}", str(audio_out), "", str(run_log) if run_log is not None else None
         except Exception as exc:
-            return "error", "", "", f"Audio extraction failed: {exc}", "", None
+            return "error", "", "", f"Audio extraction failed: {exc}", "", None, None
 
     def prettify(msg: str) -> str:
         STEP_NAME_MAP = {
@@ -284,7 +293,7 @@ def build_interface() -> None:
 
         def target() -> None:
             try:
-                status, output_path, message = run_video_pipeline(
+                status, output_path, message, srt_path = run_video_pipeline(
                     str(video_file),
                     extract_audio=extract_audio,
                     generate_subtitles=generate_subtitles,
@@ -293,9 +302,9 @@ def build_interface() -> None:
                     asr_language=asr_language or None,
                     progress_callback=progress_cb,
                 )
-                result_container['result'] = (status, output_path, message)
+                result_container['result'] = (status, output_path, message, srt_path)
             except Exception as exc:
-                result_container['result'] = ('error', '', str(exc))
+                result_container['result'] = ('error', '', str(exc), None)
 
         thread = threading.Thread(target=target, daemon=True)
         thread.start()
@@ -309,15 +318,15 @@ def build_interface() -> None:
                 else:
                     step_lines.append(prettify(ev))
                 # yield accumulated logs into the two textboxes
-                yield "\n".join(step_lines), "\n".join(ffmpeg_lines), "", "", "", None
+                yield "\n".join(step_lines), "\n".join(ffmpeg_lines), "", "", "", "", None
             time.sleep(0.2)
 
         # final result
-        status, output_path, message = result_container.get('result', ('error', '', 'No result'))
+        status, output_path, message, srt_path = result_container.get('result', ('error', '', 'No result', None))
         return_steps = "\n".join(step_lines)
         return_ffmpeg = "\n".join(ffmpeg_lines)
         run_log_str = str(run_log_path) if run_log_path is not None else None
-        yield return_steps, return_ffmpeg, output_path, message, "", run_log_str
+        yield return_steps, return_ffmpeg, output_path, message, "", srt_path, run_log_str
 
     with gr.Blocks() as demo:
         gr.Markdown('# Video Pipeline Colab UI')
@@ -343,19 +352,21 @@ def build_interface() -> None:
         with gr.Row():
             audio_out = gr.Textbox(label='Audio path (if extracted)', interactive=False)
         with gr.Row():
+            srt_out = gr.Textbox(label='Subtitle (SRT) path', interactive=False)
+        with gr.Row():
             log_file = gr.File(label='Download run log')
             agg_log_file = gr.File(label='Download tổng progress.log')
 
         run_button.click(
             fn=process_stream,
             inputs=[video_input, extract_chk, subs_chk, subtitle_mode, translation_target, asr_lang],
-            outputs=[steps_out, ffmpeg_out, rendered_out, info_out, audio_out, log_file],
+            outputs=[steps_out, ffmpeg_out, rendered_out, info_out, audio_out, srt_out, log_file],
         )
 
         extract_button.click(
             fn=extract_audio_only,
             inputs=[video_input],
-            outputs=[steps_out, ffmpeg_out, rendered_out, info_out, audio_out, log_file],
+            outputs=[steps_out, ffmpeg_out, rendered_out, info_out, audio_out, srt_out, log_file],
         )
 
         def get_aggregate_log():
