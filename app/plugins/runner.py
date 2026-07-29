@@ -49,13 +49,20 @@ def build_pipeline_from_config(config: Dict[str, Any]) -> VideoPipeline:
     return VideoPipeline(enabled_steps)
 
 
-def run_from_config(config_path: str | Path = "config_pipeline_full.yaml", video_url: str | None = None) -> Dict[str, Any]:
+def run_from_config(
+    config_path: str | Path = "config_pipeline_full.yaml",
+    video_url: str | None = None,
+    extra_context: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     config = load_plugin_config(config_path)
     pipeline = build_pipeline_from_config(config)
     input_value = video_url or "https://example.com/video"
-    initial_context = {"url": input_value, "output_dir": "outputs"}
+    initial_context: Dict[str, Any] = {"url": input_value, "output_dir": "outputs"}
     if Path(input_value).exists():
         initial_context["video_path"] = input_value
         initial_context["input_path"] = input_value
         initial_context["url"] = None
+    if extra_context:
+        # merge extra context into initial context (overrides keys)
+        initial_context.update(extra_context)
     return pipeline.run(initial_context)

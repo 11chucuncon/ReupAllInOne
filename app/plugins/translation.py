@@ -77,10 +77,11 @@ class TranslationStep(BaseStep):
         self._load_env_file()
         config = self.config or {}
         provider = self._resolve_config_value(config.get("provider", "llm"))
-        target_language = config.get("target_language", "vi")
+        # allow overriding target language via runtime context
+        target_language = context.get("translation_target_language") or config.get("target_language", "vi")
         text = context.get("asr_result", {}).get("text", "") or context.get("text", "")
 
-        target_language = self._resolve_config_value(config.get("target_language", "vi"))
+        target_language = self._resolve_config_value(target_language)
 
         translation_result = {
             "provider": provider,

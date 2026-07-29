@@ -38,7 +38,8 @@ class ASRStep(BaseStep):
     def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
         config = self.config or {}
         engine = config.get("engine", "whisper")
-        language = config.get("language", "auto")
+        # allow runtime override of ASR language via context
+        language = context.get("asr_language") or config.get("language", "auto")
         audio_path = context.get("audio_path") or context.get("video_path")
         audio_file = Path(audio_path) if audio_path else None
 
