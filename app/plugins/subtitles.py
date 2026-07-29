@@ -70,6 +70,74 @@ def _translate_text(text: str, target: str) -> str:
         return f"[{target}] " + text
 
 
+def _translate_segments(segments: List[Dict[str, Any]], target: str, context_window: int = 1) -> List[str]:
+    """Translate a list of segments (dicts with 'text') preserving order.
+    Attempts OpenAI chat per-segment with neighboring context, then DeepL, then deep_translator fallback.
+    Returns list of translated strings aligned with segments.
+    """
+    import os
+
+    if not target or target == "auto":
+        return [s.get("text", "") for s in segments]
+
+    provider = os.environ.get("SUBTITLE_TRANSLATOR_PROVIDER", "auto").lower()
+
+    # Try OpenAI per-segment with context
+    if provider in ("openai", "auto") and os.environ.get("OPENAI_API_KEY"):
+        try:
+            import openai
+
+            openai.api_key = os.environ.get("OPENAI_API_KEY")
+            system = {
+                "role": "system",
+                "content": "You are a professional translator. Translate the user's text into the target language exactly, preserving meaning and punctuation. Keep translations concise and suitable for subtitle display. Respond with only the translated text."
+            }
+            results: List[str] = []
+            for i, seg in enumerate(segments):
+                before = " ".join([s.get("text", "") for s in segments[max(0, i - context_window):i]])
+                after = " ".join([s.get("text", "") for s in segments[i + 1:i + 1 + context_window]])
+                user_content = (
+                    f"Prior context: {before}\nSegment: {seg.get('text','')}\nNext context: {after}\n\nTranslate the 'Segment' into {target}:"
+                )
+                user = {"role": "user", "content": user_content}
+                try:
+                    resp = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[system, user], max_tokens=800)
+                    t = resp.choices[0].message.content.strip()
+                    results.append(t if t else f"[{target}] " + seg.get("text", ""))
+                except Exception:
+                    results.append(f"[{target}] " + seg.get("text", ""))
+            return results
+        except Exception:
+            pass
+
+    # Try DeepL per-segment
+    if provider in ("deepl", "auto") and (os.environ.get("DEEPL_AUTH_KEY") or os.environ.get("DEEPL_API_KEY")):
+        try:
+            import deepl
+
+            auth_key = os.environ.get("DEEPL_AUTH_KEY") or os.environ.get("DEEPL_API_KEY")
+            translator = deepl.Translator(auth_key)
+            out: List[str] = []
+            for seg in segments:
+                try:
+                    t = translator.translate_text(seg.get("text", ""), target_lang=target.upper())
+                    out.append(t.text)
+                except Exception:
+                    out.append(f"[{target}] " + seg.get("text", ""))
+            return out
+        except Exception:
+            pass
+
+    # Fallback to deep_translator
+    try:
+        from deep_translator import GoogleTranslator
+
+        gt = GoogleTranslator(source="auto", target=target)
+        return [gt.translate(s.get("text", "")) for s in segments]
+    except Exception:
+        return [f"[{target}] " + s.get("text", "") for s in segments]
+
+
 class SubtitleStep(BaseStep):
     name = "Subtitles"
 
@@ -111,6 +179,14 @@ class SubtitleStep(BaseStep):
         # prepare srt lines
         srt_lines: List[str] = []
         MIN_SEG_DUR = 0.4
+        # If translation requested, translate segments in batch (preserve order)
+        translated_texts: List[str] | None = None
+        if translation_target:
+            try:
+                translated_texts = _translate_segments(timestamps, translation_target, context_window=1)
+            except Exception:
+                translated_texts = None
+
         for idx, seg in enumerate(timestamps, start=1):
             start = float(seg.get("start", 0.0))
             end = float(seg.get("end", start + 4.0))
@@ -124,7 +200,10 @@ class SubtitleStep(BaseStep):
                 start = max(0.0, end - MIN_SEG_DUR)
             text = seg.get("text", "")
             if translation_target:
-                text = _translate_text(text, translation_target)
+                if translated_texts is not None and idx - 1 < len(translated_texts):
+                    text = translated_texts[idx - 1]
+                else:
+                    text = _translate_text(text, translation_target)
             srt_lines.append(str(idx))
             srt_lines.append(f"{_secs_to_srt(start)} --> {_secs_to_srt(end)}")
             srt_lines.append(text)
