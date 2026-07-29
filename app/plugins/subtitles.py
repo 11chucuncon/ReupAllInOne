@@ -27,6 +27,38 @@ def _translate_text(text: str, target: str) -> str:
 
     # Try OpenAI chat completion for high-quality contextual translation
     try:
+        # OpenRouter (OpenAI-compatible chat endpoint) support
+        if provider in ("openrouter", "auto") and os.environ.get("OPENROUTER_API_KEY"):
+            try:
+                import requests
+
+                or_key = os.environ.get("OPENROUTER_API_KEY")
+                or_model = os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash")
+                url = os.environ.get("OPENROUTER_URL", "https://api.openrouter.ai/v1/chat/completions")
+                headers = {"Authorization": f"Bearer {or_key}", "Content-Type": "application/json"}
+                payload = {
+                    "model": or_model,
+                    "messages": [
+                        {"role": "system", "content": "You are a professional translator. Translate the user's text into the target language exactly, preserving meaning and punctuation. Respond with only the translated text."},
+                        {"role": "user", "content": f"Translate to {target}: {text}"},
+                    ],
+                    "max_tokens": 2000,
+                }
+                resp = requests.post(url, json=payload, headers=headers, timeout=30)
+                if resp.status_code == 200:
+                    j = resp.json()
+                    # OpenRouter uses OpenAI-compatible response shape
+                    choice = j.get("choices", [{}])[0]
+                    msg = choice.get("message") or choice.get("text")
+                    if isinstance(msg, dict):
+                        t = msg.get("content", "").strip()
+                    else:
+                        t = (msg or "").strip()
+                    if t:
+                        return t
+            except Exception:
+                pass
+
         if provider in ("openai", "auto") and os.environ.get("OPENAI_API_KEY"):
             import openai
 
@@ -83,6 +115,49 @@ def _translate_segments(segments: List[Dict[str, Any]], target: str, context_win
     provider = os.environ.get("SUBTITLE_TRANSLATOR_PROVIDER", "auto").lower()
 
     # Try OpenAI per-segment with context
+    # OpenRouter per-segment (preferred if available)
+    if provider in ("openrouter", "auto") and os.environ.get("OPENROUTER_API_KEY"):
+        try:
+            import requests
+
+            or_key = os.environ.get("OPENROUTER_API_KEY")
+            or_model = os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash")
+            url = os.environ.get("OPENROUTER_URL", "https://api.openrouter.ai/v1/chat/completions")
+            headers = {"Authorization": f"Bearer {or_key}", "Content-Type": "application/json"}
+            results: List[str] = []
+            for i, seg in enumerate(segments):
+                before = " ".join([s.get("text", "") for s in segments[max(0, i - context_window):i]])
+                after = " ".join([s.get("text", "") for s in segments[i + 1:i + 1 + context_window]])
+                user_content = (
+                    f"Prior context: {before}\nSegment: {seg.get('text','')}\nNext context: {after}\n\nTranslate the 'Segment' into {target}:"
+                )
+                payload = {
+                    "model": or_model,
+                    "messages": [
+                        {"role": "system", "content": "You are a professional translator. Keep translations concise and suitable for subtitle display. Respond with only the translated text."},
+                        {"role": "user", "content": user_content},
+                    ],
+                    "max_tokens": 800,
+                }
+                try:
+                    resp = requests.post(url, json=payload, headers=headers, timeout=30)
+                    if resp.status_code == 200:
+                        j = resp.json()
+                        choice = j.get("choices", [{}])[0]
+                        msg = choice.get("message") or choice.get("text")
+                        if isinstance(msg, dict):
+                            t = msg.get("content", "").strip()
+                        else:
+                            t = (msg or "").strip()
+                        results.append(t if t else f"[{target}] " + seg.get("text", ""))
+                    else:
+                        results.append(f"[{target}] " + seg.get("text", ""))
+                except Exception:
+                    results.append(f"[{target}] " + seg.get("text", ""))
+            return results
+        except Exception:
+            pass
+
     if provider in ("openai", "auto") and os.environ.get("OPENAI_API_KEY"):
         try:
             import openai
