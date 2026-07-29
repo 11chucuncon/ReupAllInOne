@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -24,10 +25,13 @@ def mount_drive() -> None:
 
 def find_repo_root() -> Path | None:
     candidates = [
+        Path.cwd(),
+        Path('/content/project'),
         Path('/content/video-pipeline'),
+        Path('/content/drive/MyDrive/A'),
         Path('/content/drive/MyDrive/video-pipeline'),
+        Path('/content/drive/My Drive/A'),
         Path('/content/drive/My Drive/video-pipeline'),
-        Path('/content'),
     ]
     for candidate in candidates:
         if (candidate / 'app' / 'plugins' / 'runner.py').exists():
@@ -35,11 +39,43 @@ def find_repo_root() -> Path | None:
     return None
 
 
+def clone_repo_if_needed() -> Path:
+    repo_root = Path('/content/project')
+    if (repo_root / 'app' / 'plugins' / 'runner.py').exists():
+        return repo_root
+
+    if repo_root.exists():
+        shutil.rmtree(repo_root, ignore_errors=True)
+
+    for url in ['https://github.com/hanhwannau/A.git', 'https://github.com/hanhwannau/A']:
+        for branch in ['master', 'main']:
+            print(f'Trying {url} branch {branch}...')
+            try:
+                subprocess.run(
+                    ['git', 'clone', '--depth', '1', '--branch', branch, url, str(repo_root)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                print('Clone succeeded')
+                return repo_root
+            except subprocess.CalledProcessError as exc:
+                print('Clone failed:', exc.returncode)
+                print('stdout:', exc.stdout)
+                print('stderr:', exc.stderr)
+
+    raise RuntimeError('Failed to clone repository from GitHub. Check connectivity/authentication and whether the repo is public.')
+
+
 def setup_repository() -> Path:
     repo_root = find_repo_root()
     if repo_root is None:
+        repo_root = clone_repo_if_needed()
+        repo_root = find_repo_root()
+
+    if repo_root is None:
         raise FileNotFoundError(
-            'Could not find the project repository. Upload the repo to /content/video-pipeline or mount Drive to /content/drive/MyDrive/video-pipeline.'
+            'Could not find the project repository. Please ensure the repo is available at /content/project or in Drive.'
         )
     os.chdir(repo_root)
     sys.path.insert(0, str(repo_root))
@@ -47,9 +83,9 @@ def setup_repository() -> Path:
 
 
 def run_video_pipeline(video_path: str) -> tuple[str, str, str]:
+    repo_root = setup_repository()
     from app.plugins.runner import run_from_config
 
-    repo_root = setup_repository()
     input_path = Path(video_path)
     if not input_path.exists():
         raise FileNotFoundError(f'Video file not found: {video_path}')
@@ -95,7 +131,7 @@ def build_interface() -> None:
             'Upload a video and click **Run**. The pipeline will execute on Colab and return the rendered video path.'
         )
         with gr.Row():
-            video_input = gr.File(label='Upload video file', file_count='single', type='file')
+            video_input = gr.File(label='Upload video file', file_count='single', type='filepath')
         with gr.Row():
             run_button = gr.Button('Run pipeline')
         status_output = gr.Textbox(label='Render status', interactive=False)
