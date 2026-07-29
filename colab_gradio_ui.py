@@ -115,32 +115,34 @@ def run_video_pipeline(video_path: str) -> tuple[str, str, str]:
 def build_interface() -> None:
     import gradio as gr
 
-    def process(video_file: Path | None) -> tuple[str, str, str]:
-        if video_file is None:
-            return 'No video uploaded', '', ''
-        video_path = str(video_file)
+    def process(video_file: str | Path | None) -> tuple[str, str, str]:
         try:
+            if video_file is None:
+                return 'No video uploaded', '', 'Please upload a video file.'
+
+            # gr.File with type='filepath' returns a server path string in many setups
+            video_path = str(video_file)
             status, output_path, message = run_video_pipeline(video_path)
             return status, output_path, message
         except Exception as exc:
             return 'error', '', str(exc)
 
-    with gr.Blocks() as demo:
-        gr.Markdown('# Video Pipeline Colab UI')
-        gr.Markdown(
-            'Upload a video and click **Run**. The pipeline will execute on Colab and return the rendered video path.'
-        )
-        with gr.Row():
-            video_input = gr.File(label='Upload video file', file_count='single', type='filepath')
-        with gr.Row():
-            run_button = gr.Button('Run pipeline')
-        status_output = gr.Textbox(label='Render status', interactive=False)
-        output_path = gr.Textbox(label='Rendered output path', interactive=False)
-        message_output = gr.Textbox(label='Info / Drive copy status', interactive=False)
+    inputs = gr.File(label='Upload video file', file_count='single', type='filepath')
+    outputs = [
+        gr.Textbox(label='Render status', interactive=False),
+        gr.Textbox(label='Rendered output path', interactive=False),
+        gr.Textbox(label='Info / Drive copy status', interactive=False),
+    ]
 
-        run_button.click(process, inputs=[video_input], outputs=[status_output, output_path, message_output])
+    iface = gr.Interface(
+        fn=process,
+        inputs=inputs,
+        outputs=outputs,
+        title='Video Pipeline Colab UI',
+        description='Upload a video and click Run. The pipeline will execute on Colab and return the rendered video path.',
+    )
 
-    demo.launch(share=True)
+    iface.launch(share=True)
 
 
 if __name__ == '__main__':
