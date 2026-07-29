@@ -4,9 +4,9 @@ import os
 import shutil
 import subprocess
 import sys
-from pathlib import Path
 import threading
 import time
+from pathlib import Path
 from typing import Callable
 
 
@@ -21,9 +21,54 @@ def mount_drive() -> None:
     try:
         from google.colab import drive
 
-        drive.mount('/content/drive', force_remount=False)
+        drive.mount("/content/drive", force_remount=False)
     except Exception as exc:
-        print('Drive mount skipped or already mounted:', exc)
+        print("Drive mount skipped or already mounted:", exc)
+
+
+def find_repo_root() -> Path | None:
+    candidates = [
+        Path.cwd(),
+        Path("/content/project"),
+        Path("/content/video-pipeline"),
+        Path("/content/drive/MyDrive/A"),
+        Path("/content/drive/MyDrive/video-pipeline"),
+        Path("/content/drive/My Drive/A"),
+        Path("/content/drive/My Drive/video-pipeline"),
+    ]
+    for candidate in candidates:
+        if (candidate / "app" / "plugins" / "runner.py").exists():
+            return candidate
+    return None
+
+
+def clone_repo_if_needed() -> Path:
+    repo_root = Path("/content/project")
+    if (repo_root / "app" / "plugins" / "runner.py").exists():
+        return repo_root
+
+    if repo_root.exists():
+        shutil.rmtree(repo_root, ignore_errors=True)
+
+    for url in ["https://github.com/hanhwannau/A.git", "https://github.com/hanhwannau/A"]:
+        for branch in ["master", "main"]:
+            print(f"Trying {url} branch {branch}...")
+            try:
+                subprocess.run(
+                    ["git", "clone", "--depth", "1", "--branch", branch, url, str(repo_root)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                print("Clone succeeded")
+                return repo_root
+            except subprocess.CalledProcessError as exc:
+                print("Clone failed:", exc.returncode)
+                print("stdout:", exc.stdout)
+                print("stderr:", exc.stderr)
+
+    raise RuntimeError("Failed to clone repository from GitHub. Check connectivity/authentication and whether the repo is public.")
+
 
 def setup_repository() -> Path:
     repo_root = find_repo_root()
@@ -33,7 +78,7 @@ def setup_repository() -> Path:
 
     if repo_root is None:
         raise FileNotFoundError(
-            'Could not find the project repository. Please ensure the repo is available at /content/project or in Drive.'
+            "Could not find the project repository. Please ensure the repo is available at /content/project or in Drive."
         )
     os.chdir(repo_root)
     sys.path.insert(0, str(repo_root))
@@ -93,33 +138,80 @@ def run_video_pipeline(
 
 def build_interface() -> None:
     import gradio as gr
-    def extract_audio_only(video_file: str | Path | None) -> tuple[str, str, str, str]:
+
+    def extract_audio_only(video_file: str | Path | None):
+        # returns: steps_log, ffmpeg_log, rendered_path, info_message, audio_path, run_log_path
+        if video_file is None:
+            return "Không có video", "", "", "Vui lòng upload video", "", None
+        repo_root = setup_repository()
+        input_path = Path(str(video_file))
+        outputs_dir = repo_root / "outputs"
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        audio_out = outputs_dir / "audio.wav"
         try:
-            if video_file is None:
-                return 'no-input', '', 'Please upload a video file.', ''
-            repo_root = setup_repository()
-            input_path = Path(str(video_file))
-            outputs_dir = repo_root / "outputs"
-            outputs_dir.mkdir(parents=True, exist_ok=True)
-            audio_out = outputs_dir / "audio.wav"
+            subprocess.run([
+                shutil.which("ffmpeg") or "ffmpeg",
+                "-y",
+                "-i",
+                str(input_path),
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                str(audio_out),
+            ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            run_log = outputs_dir / f"progress-extract-{time.strftime('%Y%m%d-%H%M%S')}.log"
             try:
-                subprocess.run([
-                    shutil.which("ffmpeg") or "ffmpeg",
-                    "-y",
-                    "-i",
-                    str(input_path),
-                    "-vn",
-                    "-ac",
-                    "1",
-                    "-ar",
-                    "16000",
-                    str(audio_out),
-                ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                return 'audio_extracted', '', f'Audio extracted: {audio_out}', str(audio_out)
-            except Exception as exc:
-                return 'error', '', f'Audio extraction failed: {exc}', ''
+                with open(run_log, "a", encoding="utf-8") as fh:
+                    fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - Tách audio: {audio_out}\n")
+            except Exception:
+                run_log = None
+            return "Tách audio xong", "", "", f"Audio extracted: {audio_out}", str(audio_out), str(run_log) if run_log is not None else None
         except Exception as exc:
-            return 'error', '', str(exc), ''
+            return "error", "", "", f"Audio extraction failed: {exc}", "", None
+
+    def prettify(msg: str) -> str:
+        STEP_NAME_MAP = {
+            "Download Video": "Tải video",
+            "ASR": "Nhận diện giọng nói (ASR)",
+            "Translation": "Dịch văn bản",
+            "TranslateStep": "Dịch (bước phụ)",
+            "OCR": "Nhận diện chữ (OCR)",
+            "TTSStep": "TTS (chuyển văn bản -> giọng nói)",
+            "FFmpeg Render": "Kết xuất (ffmpeg)",
+            "WatermarkStep": "Thêm watermark",
+            "Extract Audio": "Tách audio",
+        }
+        try:
+            if msg.startswith("start:"):
+                step = msg.split(":", 1)[1]
+                display = STEP_NAME_MAP.get(step, step)
+                return f"Bắt đầu: {display}"
+            if msg.startswith("end:"):
+                step = msg.split(":", 1)[1]
+                display = STEP_NAME_MAP.get(step, step)
+                return f"Kết thúc: {display}"
+            if msg.startswith("download:"):
+                return f"Tải về: {msg.split(':',1)[1]}"
+            if msg.startswith("asr:"):
+                text = msg.split(":", 1)[1]
+                return f"ASR: {text[:300]}"
+            if msg.startswith("translate:"):
+                text = msg.split(":", 1)[1]
+                return f"Dịch: {text[:300]}"
+            if msg.startswith("render:"):
+                status = msg.split(":", 1)[1]
+                if status.strip().lower() == "success":
+                    return "Kết xuất: Thành công"
+                return f"Kết xuất: {status}"
+            if msg.startswith("ffmpeg-extract:"):
+                return f"ffmpeg (tách audio): {msg.split(':',1)[1]}"
+            if msg.startswith("ffmpeg:"):
+                return f"ffmpeg: {msg.split(':',1)[1]}"
+        except Exception:
+            pass
+        return msg
 
     def process_stream(
         video_file: str | Path | None,
@@ -131,45 +223,8 @@ def build_interface() -> None:
     ):
         # generator that streams progress updates via a background thread
         if video_file is None:
-            yield 'No video uploaded', '', '', ''
+            yield "Không có video", "", "", "", "", None
             return
-
-        yield 'Starting pipeline...', '', '', ''
-
-        audio_path = ''
-
-        events: list[str] = []
-        step_lines: list[str] = []
-        ffmpeg_lines: list[str] = []
-
-        def prettify(msg: str) -> str:
-            try:
-                if msg.startswith("start:"):
-                    step = msg.split(":", 1)[1]
-                    return f"Bắt đầu: {step}"
-                if msg.startswith("end:"):
-                    step = msg.split(":", 1)[1]
-                    return f"Kết thúc: {step}"
-                if msg.startswith("download:"):
-                    return f"Tải về: {msg.split(':',1)[1]}"
-                if msg.startswith("asr:"):
-                    text = msg.split(":", 1)[1]
-                    return f"ASR: {text[:300]}"
-                if msg.startswith("translate:"):
-                    text = msg.split(":", 1)[1]
-                    return f"Dịch: {text[:300]}"
-                if msg.startswith("render:"):
-                    status = msg.split(":", 1)[1]
-                    if status.strip().lower() == "success":
-                        return "Kết xuất: Thành công"
-                    return f"Kết xuất: {status}"
-                if msg.startswith("ffmpeg-extract:"):
-                    return f"ffmpeg (tách audio): {msg.split(':',1)[1]}"
-                if msg.startswith("ffmpeg:"):
-                    return f"ffmpeg: {msg.split(':',1)[1]}"
-            except Exception:
-                pass
-            return msg
 
         repo_root_local = None
         try:
@@ -178,16 +233,34 @@ def build_interface() -> None:
         except Exception:
             repo_root_local = None
 
+        # per-run logfile
+        run_id = time.strftime('%Y%m%d-%H%M%S')
+        run_log_path = None
+        if repo_root_local is not None:
+            run_log_path = repo_root_local / "outputs" / f"progress-{run_id}.log"
+            try:
+                with open(run_log_path, "a", encoding="utf-8") as fh:
+                    fh.write(f"Run start: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            except Exception:
+                run_log_path = None
+
+        events: list[str] = []
+        step_lines: list[str] = []
+        ffmpeg_lines: list[str] = []
+
         def progress_cb(message: str) -> None:
-            # append raw message to events; prettify when consuming
             events.append(message)
-            # write prettified log to outputs/progress.log if repo available
+            # write prettified log to outputs/progress.log and per-run log if available
             try:
                 pretty = prettify(message)
+                timestamped = f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {pretty}\n"
                 if repo_root_local is not None:
                     log_path = repo_root_local / "outputs" / "progress.log"
                     with open(log_path, "a", encoding="utf-8") as fh:
-                        fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {pretty}\n")
+                        fh.write(timestamped)
+                if run_log_path is not None:
+                    with open(run_log_path, "a", encoding="utf-8") as fh:
+                        fh.write(timestamped)
             except Exception:
                 pass
 
@@ -197,7 +270,7 @@ def build_interface() -> None:
             try:
                 status, output_path, message = run_video_pipeline(
                     str(video_file),
-                    extract_audio=False,
+                    extract_audio=extract_audio,
                     generate_subtitles=generate_subtitles,
                     subtitle_mode=subtitle_mode,
                     translation_target=translation_target or None,
@@ -220,12 +293,15 @@ def build_interface() -> None:
                 else:
                     step_lines.append(prettify(ev))
                 # yield accumulated logs into the two textboxes
-                yield "\n".join(step_lines), "\n".join(ffmpeg_lines), '', '', audio_path
+                yield "\n".join(step_lines), "\n".join(ffmpeg_lines), "", "", "", None
             time.sleep(0.2)
 
         # final result
         status, output_path, message = result_container.get('result', ('error', '', 'No result'))
-        yield "\n".join(step_lines), "\n".join(ffmpeg_lines), output_path, message, audio_path
+        return_steps = "\n".join(step_lines)
+        return_ffmpeg = "\n".join(ffmpeg_lines)
+        run_log_str = str(run_log_path) if run_log_path is not None else None
+        yield return_steps, return_ffmpeg, output_path, message, "", run_log_str
 
     with gr.Blocks() as demo:
         gr.Markdown('# Video Pipeline Colab UI')
@@ -249,17 +325,19 @@ def build_interface() -> None:
             info_out = gr.Textbox(label='Info / Drive copy status', interactive=False)
         with gr.Row():
             audio_out = gr.Textbox(label='Audio path (if extracted)', interactive=False)
+        with gr.Row():
+            log_file = gr.File(label='Download run log')
 
         run_button.click(
             fn=process_stream,
             inputs=[video_input, extract_chk, subs_chk, subtitle_mode, translation_target, asr_lang],
-            outputs=[steps_out, ffmpeg_out, rendered_out, info_out, audio_out],
+            outputs=[steps_out, ffmpeg_out, rendered_out, info_out, audio_out, log_file],
         )
 
         extract_button.click(
             fn=extract_audio_only,
             inputs=[video_input],
-            outputs=[steps_out, ffmpeg_out, rendered_out, info_out, audio_out],
+            outputs=[steps_out, ffmpeg_out, rendered_out, info_out, audio_out, log_file],
         )
 
     demo.launch(share=True)
