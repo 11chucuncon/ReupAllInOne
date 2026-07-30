@@ -17,3 +17,5 @@ av
 imageio[ffmpeg]
 transformers
 sentencepiece
+requests
+deep-translator

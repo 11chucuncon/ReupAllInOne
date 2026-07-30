@@ -14,7 +14,7 @@ from core.inpainter import VideoInpainter
 from core.rewriter import LLMRewriter
 from core.transcriber import WhisperTranscriber
 from core.tts_engine import TTSEngine
-from core.translation import TranslationEngine
+from core.translator import TranslationEngine
 from core.upscaler import VideoUpscaler
 from core.subtitle_renderer import SubtitleRenderer
 

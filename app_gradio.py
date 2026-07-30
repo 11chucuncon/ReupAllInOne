@@ -137,6 +137,11 @@ def create_app() -> gr.Blocks:
                     type="password",
                     placeholder="Enter your Gemini/OpenRouter API key here",
                 )
+                translation_api_key = gr.Textbox(
+                    label="OpenRouter API Key (translation only)",
+                    type="password",
+                    placeholder="Optional. Uses fallback Google Translate if empty.",
+                )
                 tts_engine_mode = gr.Radio(
                     label="TTS Engine",
                     choices=["Edge-TTS Free (Tốc độ cao)", "Local XTTS v2 Clone"],
@@ -249,6 +254,7 @@ def create_app() -> gr.Blocks:
             auto_rewrite_value: bool,
             target_language_value: Optional[str],
             gemini_api_key_value: Optional[str],
+            translation_api_key_value: Optional[str],
             tts_engine_mode_value: Optional[str],
             tts_mode_value: Optional[str],
             reference_audio_value,
@@ -289,7 +295,7 @@ def create_app() -> gr.Blocks:
                     auto_rewrite=auto_rewrite_value,
                     target_language=sanitize_lang_code(target_language_value),
                     custom_voice=_map_voice_label(voice_value),
-                    openrouter_api_key=gemini_api_key_value,
+                    openrouter_api_key=translation_api_key_value or gemini_api_key_value,
                     tts_engine_mode=tts_engine_mode_value or "Edge-TTS Free (Tốc độ cao)",
                     tts_mode=tts_mode_value or "Translated narration",
                     reference_audio_path=reference_audio_value if isinstance(reference_audio_value, str) else None,
@@ -356,6 +362,7 @@ def create_app() -> gr.Blocks:
                 auto_rewrite,
                 target_language,
                 gemini_api_key,
+                translation_api_key,
                 tts_engine_mode,
                 tts_mode,
                 reference_audio,
