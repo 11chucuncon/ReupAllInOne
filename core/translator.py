@@ -23,10 +23,7 @@ class TranslationEngine:
         self.provider = str(self.translation_config.get("provider", "openrouter")).lower()
         self.target_language = self.translation_config.get("target_language", "vi")
         self.api_key = str(self.translation_config.get("api_key", "") or "")
-        self.openrouter_model = str(
-            self.translation_config.get("openrouter_model")
-            or self.translation_config.get("model", "deepseek/deepseek-v4-flash")
-        )
+        self.openrouter_model = self._resolve_openrouter_model()
 
     def _load_settings(self) -> dict[str, Any]:
         try:
@@ -38,6 +35,29 @@ class TranslationEngine:
         except yaml.YAMLError as exc:
             logger.warning("Invalid YAML configuration: %s", exc)
             return {}
+
+    def _resolve_openrouter_model(self) -> str:
+        """Pick a valid OpenRouter model and avoid legacy Hugging Face translation model names."""
+        configured_model = str(
+            self.translation_config.get("openrouter_model")
+            or self.translation_config.get("model")
+            or os.environ.get("OPENROUTER_MODEL", "")
+            or ""
+        ).strip()
+
+        if self.provider in {"openrouter", "llm", "deepseek"}:
+            if not configured_model:
+                return "deepseek/deepseek-chat"
+            normalized = configured_model.lower()
+            if "opus-mt" in normalized or "huggingface" in normalized or normalized.startswith("helsinki"):
+                logger.warning(
+                    "Detected a Hugging Face-style translation model '%s'; using OpenRouter model 'deepseek/deepseek-chat' instead.",
+                    configured_model,
+                )
+                return "deepseek/deepseek-chat"
+            return configured_model
+
+        return configured_model or "deepseek/deepseek-chat"
 
     def translate_text(self, text: str, target_language: str | None = None, api_key: str | None = None) -> str:
         """Translate a single text chunk with OpenRouter and graceful fallback."""
