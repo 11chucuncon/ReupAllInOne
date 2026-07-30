@@ -417,8 +417,9 @@ def create_app() -> gr.Blocks:
 
 if __name__ == "__main__":
     demo = create_app()
+    allowed_paths = [str(OUTPUT_DIR), str(OUTPUT_DIR.parent)]
     demo.queue(default_concurrency_limit=1).launch(
         share=True,
         debug=True,
-        allowed_paths=["/content/workspace", "/content/workspace/output"],
+        allowed_paths=allowed_paths,
     )

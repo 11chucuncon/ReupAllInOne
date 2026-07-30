@@ -86,6 +86,49 @@ class VideoUpscaler:
         ]
         self._run_command(command)
 
+    def _get_upscale_command_candidates(
+        self,
+        input_video: Path,
+        output_video: Path,
+        scale: int,
+    ) -> list[list[str]]:
+        candidates: list[list[str]] = []
+
+        if shutil.which("realesrgan-ncnn-vulkan"):
+            candidates.append(
+                [
+                    "realesrgan-ncnn-vulkan",
+                    "-i",
+                    str(input_video),
+                    "-o",
+                    str(output_video),
+                    "-s",
+                    str(scale),
+                    "-m",
+                    str(self.model_path),
+                ]
+            )
+
+        python_exec = shutil.which("python") or shutil.which("python3")
+        if python_exec:
+            candidates.append(
+                [
+                    python_exec,
+                    "-m",
+                    "realesrgan",
+                    "--input",
+                    str(input_video),
+                    "--output",
+                    str(output_video),
+                    "--scale",
+                    str(scale),
+                    "--model_path",
+                    str(self.model_path),
+                ]
+            )
+
+        return candidates
+
     def _upscale_video(self, input_video: Path, output_video: Path, scale: int) -> None:
         if not self.model_path.exists():
             raise FileNotFoundError(
@@ -93,44 +136,12 @@ class VideoUpscaler:
                 " Please download the model weights to the configured path."
             )
 
-        try:
-            from realesrgan import RealESRGANer
-            from realesrgan.archs import RRDBNet
-            from realesrgan.utils import img2tensor, tensor2img
-            from PIL import Image
-            import cv2
-            import numpy as np
-
-            logger.info("Using Python Real-ESRGAN API for upscaling")
-            model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=6, num_grow_ch=32, scale=scale)
-            upsampler = RealESRGANer(
-                scale=scale,
-                model_path=str(self.model_path),
-                model=model,
-                tile=0,
-                tile_pad=10,
-                pre_pad=0,
-                half=False,
-                gpu_id=0,
+        candidates = self._get_upscale_command_candidates(input_video, output_video, scale)
+        if not candidates:
+            raise RuntimeError(
+                "No Real-ESRGAN executable was found on PATH. "
+                "Install either 'realesrgan-ncnn-vulkan' or the Python 'realesrgan' package."
             )
-
-            frame = cv2.imread(str(input_video))
-            if frame is None:
-                raise RuntimeError(f"Could not read input video frame from {input_video}")
-            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(img)
-            _, _, output_img = upsampler.enhance(img, outscale=scale)
-            output_rgb = np.array(output_img)
-            output_bgr = cv2.cvtColor(output_rgb, cv2.COLOR_RGB2BGR)
-            cv2.imwrite(str(output_video), output_bgr)
-            return
-        except Exception as exc:
-            logger.warning("Python Real-ESRGAN API unavailable: %s", exc)
-
-        candidates = [
-            ["realesrgan-ncnn-vulkan", "-i", str(input_video), "-o", str(output_video), "-s", str(scale), "-m", str(self.model_path)],
-            ["python", "-m", "realesrgan", "--input", str(input_video), "--output", str(output_video), "--scale", str(scale), "--model_path", str(self.model_path)],
-        ]
 
         last_error: Optional[str] = None
         for command in candidates:
