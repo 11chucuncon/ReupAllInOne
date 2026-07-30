@@ -2,12 +2,13 @@ yt-dlp
 faster-whisper
 google-generativeai
 edge-tts
-TTS
+coqui-tts
 torch
 torchaudio
 realesrgan
 facexlib
 gfpgan
+basicsr
 gradio
 pyyaml
 pyngrok
