@@ -1,0 +1,83 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0f19;
+  --surface: #161c2e;
+  --surface-2: #1d2538;
+  --border: #2a344d;
+  --text: #ffffff;
+  --muted: #9e9e9e;
+  --accent-green: #00c853;
+  --accent-pink: #ff4081;
+}
+
+body, .gradio-container {
+  background: linear-gradient(135deg, var(--bg), #111727);
+  color: var(--text);
+  font-family: Inter, "Segoe UI", Roboto, sans-serif;
+}
+
+.gradio-container {
+  padding: 20px;
+}
+
+.block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+
+.sidebar, .main-panel, .inspector {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+input, textarea, select, button, .gradio-dropdown, .gradio-slider {
+  border-radius: 10px !important;
+  border: 1px solid var(--border) !important;
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
+}
+
+button, .gradio-button {
+  transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease;
+  border: none !important;
+  background: linear-gradient(90deg, var(--accent-green), var(--accent-pink)) !important;
+  color: white !important;
+  font-weight: 600;
+}
+
+button:hover, .gradio-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(0, 200, 83, 0.2);
+}
+
+h1, h2, h3, h4, p {
+  color: var(--text);
+}
+
+.small-text, .secondary-text {
+  color: var(--muted);
+}
+
+/* Scrollbar styling */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a344d transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #2a344d;
+  border-radius: 999px;
+}

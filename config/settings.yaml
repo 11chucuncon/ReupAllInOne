@@ -1,0 +1,24 @@
+app:
+  max_workers: 3
+  temp_dir: "temp"
+  output_dir: "outputs"
+
+whisper:
+  model_size: "small"
+  device: "cuda"
+  compute_type: "float16"
+
+gemini:
+  api_key: "YOUR_GEMINI_API_KEY"
+  model_name: "gemini-1.5-flash"
+  prompt_template: "Hãy viết lại kịch bản sau đây theo phong cách cuốn hút, giữ nguyên ý chính nhưng đổi câu từ để tránh trùng lặp nội dung. Chỉ trả về văn bản kịch bản mới:"
+
+tts:
+  default_voice: "vi-VN-HoaiMyNeural"
+  rate: "+0%"
+  volume: "+0%"
+
+ffmpeg:
+  hflip: true
+  speed_factor: 1.05
+  use_nvenc: true

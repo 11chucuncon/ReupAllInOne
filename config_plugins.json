@@ -1,7 +1,0 @@
-{
-  "steps": [
-    "DownloadStep",
-    "TranslateStep",
-    "WatermarkStep"
-  ]
-}
