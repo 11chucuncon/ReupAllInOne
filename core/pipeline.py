@@ -11,7 +11,7 @@ from typing import Any
 import yaml
 
 from core.inpainter import VideoInpainter
-from core.ocr_processor import OCRProcessor
+from core.transcriber import WhisperTranscriber
 from core.subtitle_renderer import SubtitleRenderer
 from core.translation import TranslationEngine
 from core.tts_engine import TTSEngine
@@ -21,14 +21,13 @@ logger = logging.getLogger(__name__)
 
 
 class ReupPipeline:
-    """Professional Auto-Reup pipeline for video OCR, inpainting, translation, TTS, and rendering."""
+    """Professional Auto-Reup pipeline for video transcription, inpainting, translation, TTS, and rendering."""
 
     def __init__(self, config_path: str | None = None) -> None:
         self.project_root = Path(__file__).resolve().parents[1]
         self.config_path = config_path or str(self.project_root / "config" / "settings.yaml")
         self.settings = self._load_settings()
-        ocr_langs = self.settings.get("ocr", {}).get("languages")
-        self.ocr_processor = OCRProcessor(config_path=self.config_path, languages=ocr_langs)
+        self.transcriber = WhisperTranscriber(config_path=self.config_path)
         self.inpainter = VideoInpainter(self.config_path)
         self.translator = TranslationEngine(self.config_path)
         self.subtitle_renderer = SubtitleRenderer(self.config_path)
@@ -62,19 +61,32 @@ class ReupPipeline:
         logger.info("Starting professional video processing pipeline")
 
         cleaned_video_path = self.temp_dir / "cleaned_video.mp4"
-        ocr_data = self.ocr_processor.detect_text(source_video)
         if inpaint_mode != "off":
-            if inpaint_mode == "subtitle_mask":
-                cleaned_video_path = self.inpainter.clean_video(source_video, str(cleaned_video_path))
-            else:
-                cleaned_video_path = self.inpainter.clean_video(source_video, str(cleaned_video_path), mask_video_path=str(source_video))
+            cleaned_video_path = Path(
+                self.inpainter.clean_video(
+                    source_video,
+                    str(cleaned_video_path),
+                    mode=inpaint_mode,
+                )
+            )
         else:
             cleaned_video_path = Path(source_video)
 
-        srt_path = self._write_srt_file(ocr_data["segments"], self.temp_dir / "detected_subtitles.srt")
-        translated_text = self.translator.translate_text(ocr_data["full_text"], target_language=target_language)
+        transcript_data = self.transcriber.transcribe(str(cleaned_video_path))
+        original_segments = [
+            {
+                "start": float(segment.get("start", 0.0)),
+                "end": float(segment.get("end", segment.get("start", 0.0))),
+                "text": str(segment.get("text", "")).strip(),
+            }
+            for segment in transcript_data.get("segments", [])
+            if str(segment.get("text", "")).strip()
+        ]
+
+        srt_path = self._write_srt_file(original_segments, self.temp_dir / "detected_subtitles.srt")
+        translated_text = self.translator.translate_text(transcript_data["full_text"], target_language=target_language)
         translation_srt_path = self._write_srt_file(
-            [{"index": item["index"], "start_time": item["start_time"], "end_time": item["end_time"], "text": translated_text} for item in ocr_data["segments"]],
+            [{"index": idx + 1, "start": item["start"], "end": item["end"], "text": translated_text} for idx, item in enumerate(original_segments)],
             self.temp_dir / "translated_subtitles.srt",
         )
 
@@ -82,8 +94,13 @@ class ReupPipeline:
         if subtitle_mode == "dual":
             combined_srt = self._write_srt_file(
                 [
-                    {"index": item["index"], "start_time": item["start_time"], "end_time": item["end_time"], "text": f"{item['text']} | {translated_text}"}
-                    for item in ocr_data["segments"]
+                    {
+                        "index": idx + 1,
+                        "start": item["start"],
+                        "end": item["end"],
+                        "text": f"{item['text']} | {translated_text}",
+                    }
+                    for idx, item in enumerate(original_segments)
                 ],
                 self.temp_dir / "dual_subtitles.srt",
             )

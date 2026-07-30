@@ -11,7 +11,6 @@ import yaml
 from core.downloader import VideoDownloader
 from core.ffmpeg_processor import FFmpegProcessor
 from core.inpainter import VideoInpainter
-from core.ocr_processor import OCRProcessor
 from core.rewriter import LLMRewriter
 from core.transcriber import WhisperTranscriber
 from core.tts_engine import TTSEngine
@@ -33,8 +32,6 @@ class ReupPipeline:
 
         self.downloader = VideoDownloader(config_path=self.config_path)
         self.transcriber = WhisperTranscriber(config_path=self.config_path)
-        ocr_langs = self.settings.get("ocr", {}).get("languages")
-        self.ocr_processor = OCRProcessor(config_path=self.config_path, languages=ocr_langs)
         self.rewriter = LLMRewriter(config_path=self.config_path)
         self.translator = TranslationEngine(config_path=self.config_path)
         self.tts_engine = TTSEngine(config_path=self.config_path)
@@ -244,68 +241,31 @@ class ReupPipeline:
             processed_video = Path(video_path)
             original_segments: list[dict] = []
 
-            logger.info("[INFO] Step 1/6: Detecting on-screen text with OCR...")
-            ocr_data = self.ocr_processor.detect_text(str(processed_video))
+            logger.info("[INFO] Step 1/6: Transcribing audio for subtitles and narration...")
+            transcript_data = self.transcriber.transcribe(str(processed_video))
             original_segments = [
                 {
-                    "start": float(item.get("start_time", item.get("start", 0.0))),
-                    "end": float(item.get("end_time", item.get("end", item.get("start", 0.0)))),
-                    "text": str(item.get("text", "")).strip(),
+                    "start": float(segment.get("start", 0.0)),
+                    "end": float(segment.get("end", segment.get("start", 0.0))),
+                    "text": str(segment.get("text", "")).strip(),
                 }
-                for item in ocr_data.get("segments", [])
-                if str(item.get("text", "")).strip()
+                for segment in transcript_data.get("segments", [])
+                if str(segment.get("text", "")).strip()
             ]
-
-            if not original_segments:
-                logger.info("[INFO] No OCR segments were detected; falling back to audio transcription...")
-                transcript_data = self.transcriber.transcribe(str(processed_video))
-                original_segments = [
-                    {
-                        "start": float(segment.get("start", 0.0)),
-                        "end": float(segment.get("end", segment.get("start", 0.0))),
-                        "text": str(segment.get("text", "")).strip(),
-                    }
-                    for segment in transcript_data.get("segments", [])
-                    if str(segment.get("text", "")).strip()
-                ]
-                ocr_data = transcript_data
+            ocr_data = transcript_data
 
             logger.info("[INFO] Step 2/6: Running video cleanup with inpainting mode '%s'...", inpaint_mode)
             output_clean = self.temp_dir / "cleaned_video.mp4"
-            mask_video = None
-            if auto_detect_subtitles or auto_remove_watermark:
-                mask_image_path = self.temp_dir / "mask.png"
-                mask_video = self.ocr_processor.build_mask_image(
-                    str(processed_video),
-                    str(mask_image_path),
-                    original_segments,
-                    auto_remove_watermark=auto_remove_watermark,
-                )
             processed_video = Path(
                 self.inpainter.clean_video(
                     str(processed_video),
                     str(output_clean),
                     mode=inpaint_mode,
-                    mask_video_path=mask_video,
                 )
             )
 
             if not original_segments:
-                logger.info("[INFO] No OCR segments were detected; falling back to audio transcription...")
-                transcript_data = self.transcriber.transcribe(str(processed_video))
-                original_segments = [
-                    {
-                        "start": float(segment.get("start", 0.0)),
-                        "end": float(segment.get("end", segment.get("start", 0.0))),
-                        "text": str(segment.get("text", "")).strip(),
-                    }
-                    for segment in transcript_data.get("segments", [])
-                    if str(segment.get("text", "")).strip()
-                ]
-                ocr_data = transcript_data
-
-            if not original_segments:
-                raise RuntimeError("No text was extracted by OCR or transcription.")
+                raise RuntimeError("No subtitle or transcription text was extracted from the audio.")
 
             subtitle_mode = subtitle_mode.title()
             subtitle_language = self.sanitize_lang_code(target_language)

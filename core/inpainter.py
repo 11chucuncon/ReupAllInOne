@@ -8,6 +8,8 @@ from typing import Optional
 
 import yaml
 
+from core.cleaner import VideoCleaner
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +22,7 @@ class VideoInpainter:
         self.settings = self._load_settings()
         self.inpaint_config = self.settings.get("inpaint", {})
         self.propainter_dir = self.project_root / "core" / "ProPainter"
+        self.cleaner = VideoCleaner(config_path=self.config_path)
 
     def _load_settings(self) -> dict:
         try:
@@ -68,6 +71,10 @@ class VideoInpainter:
 
         if not self.propainter_dir.exists():
             raise FileNotFoundError("ProPainter repository not found in core/ProPainter")
+
+        if mask_video_path is None:
+            mask_path = output_path.parent / "propainter_mask.png"
+            mask_video_path = self.cleaner.generate_combined_mask(input_video_path, str(mask_path))
 
         command = [
             "python",

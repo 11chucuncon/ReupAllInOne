@@ -25,9 +25,19 @@ tts:
   default_engine: "edge"
   xtts_model_name: "tts_models/multilingual/multi-dataset/xtts_v2"
 
-ocr:
-  languages: ["vi", "en", "zh", "ja", "ko"]
+cleaner:
+  enabled: true
   sample_rate: 1
+  min_logo_area: 400
+  inpaint_radius: 3
+  inpaint_method: "telea"
+  yolo_confidence: 0.35
+  yolo_nms_threshold: 0.45
+  text_score_threshold: 0.5
+  text_nms_threshold: 0.4
+  yolo_config: "weights/yolov8n-watermark.cfg"
+  yolo_weights: "weights/yolov8n-watermark.weights"
+  east_model: "weights/frozen_east_text_detection.pb"
 
 translation:
   provider: "local"
