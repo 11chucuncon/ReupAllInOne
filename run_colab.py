@@ -91,6 +91,11 @@ def try_gradio_share(demo, port: int = 7860) -> str | None:
             debug=True,
             prevent_thread_lock=True,
             show_error=True,
+            allowed_paths=[
+                "/content/workspace",
+                "/content/workspace/output",
+                "/content/workspace/temp",
+            ],
         )
 
     thread = threading.Thread(target=launch_share, daemon=True)
@@ -184,6 +189,11 @@ def main() -> None:
             debug=True,
             prevent_thread_lock=True,
             show_error=True,
+            allowed_paths=[
+                "/content/workspace",
+                "/content/workspace/output",
+                "/content/workspace/temp",
+            ],
         ),
         daemon=True,
     )

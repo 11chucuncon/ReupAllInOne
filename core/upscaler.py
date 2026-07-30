@@ -136,6 +136,73 @@ class VideoUpscaler:
                 " Please download the model weights to the configured path."
             )
 
+        try:
+            from realesrgan import RealESRGANer
+            from basicsr.archs.rrdbnet_arch import RRDBNet
+            import cv2
+            import numpy as np
+
+            logger.info("Using RealESRGAN Python API for upscaling")
+
+            if self.device.lower().startswith("cuda"):
+                device = "cuda"
+            else:
+                device = "cpu"
+
+            model = RRDBNet(
+                num_in_ch=3,
+                num_out_ch=3,
+                num_feat=64,
+                num_block=23,
+                num_grow_ch=32,
+                scale=scale,
+            )
+            upsampler = RealESRGANer(
+                scale=scale,
+                model_path=str(self.model_path),
+                model=model,
+                tile=0,
+                tile_pad=10,
+                pre_pad=0,
+                half=False,
+                device=device,
+            )
+
+            capture = cv2.VideoCapture(str(input_video))
+            if not capture.isOpened():
+                raise RuntimeError(f"Could not open video for upscaling: {input_video}")
+
+            fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            output_size = (width * scale, height * scale)
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(str(output_video), fourcc, fps, output_size)
+            if not writer.isOpened():
+                capture.release()
+                raise RuntimeError(f"Could not create upscale output video: {output_video}")
+
+            while True:
+                success, frame = capture.read()
+                if not success:
+                    break
+
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                output_tensor, _ = upsampler.enhance(rgb_frame, outscale=scale)
+                if isinstance(output_tensor, np.ndarray):
+                    sr_frame = output_tensor
+                else:
+                    sr_frame = np.array(output_tensor)
+
+                bgr_frame = cv2.cvtColor(sr_frame, cv2.COLOR_RGB2BGR)
+                writer.write(bgr_frame)
+
+            writer.release()
+            capture.release()
+            return
+        except Exception as exc:
+            logger.warning("RealESRGAN Python API upscale failed: %s", exc)
+
         candidates = self._get_upscale_command_candidates(input_video, output_video, scale)
         if not candidates:
             raise RuntimeError(
