@@ -135,11 +135,13 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
             )
 
         if subtitle_file:
+            safe_font = "DejaVu Sans" if not subtitle_font or subtitle_font.lower() == "arial" else subtitle_font
             subtitle_filter = (
-                f"subtitles={subtitle_file.as_posix()}:"
-                f"force_style='Fontname={subtitle_font},Fontsize={subtitle_size},"
+                f"subtitles='{subtitle_file.as_posix()}':"
+                f"force_style='Fontname={safe_font},Fontsize={subtitle_size},"
                 f"PrimaryColour={self._hex_to_ass_color(subtitle_color)},"
-                f"OutlineColour={self._hex_to_ass_color(subtitle_outline_color)}'"
+                f"OutlineColour={self._hex_to_ass_color(subtitle_outline_color)},"
+                f"BorderStyle=1,Outline=2,Alignment=2'"
             )
             vf_parts.append(subtitle_filter)
 

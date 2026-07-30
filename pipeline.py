@@ -121,7 +121,8 @@ class ReupPipeline:
                 "",
             ]
 
-        output_file.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+        with output_file.open("w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines).strip() + "\n")
         logger.info("[INFO] Wrote subtitle file to %s", output_file)
         return output_file
 
