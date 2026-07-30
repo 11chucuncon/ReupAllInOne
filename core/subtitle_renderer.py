@@ -144,6 +144,21 @@ class SubtitleRenderer:
         escaped_path = self.escape_ass_path(ass_path)
         return f"ass='{escaped_path}'"
 
+    def _resolve_media_input_path(self, input_video_path: str) -> Path:
+        input_path = Path(input_video_path).expanduser().resolve()
+        if input_path.exists() and input_path.is_dir():
+            video_candidates = sorted(
+                path
+                for path in input_path.rglob("*")
+                if path.is_file() and path.suffix.lower() in {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v"}
+            )
+            if video_candidates:
+                return video_candidates[0]
+            raise RuntimeError(f"Input media path is a directory and contains no video files: {input_path}")
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input media file does not exist: {input_path}")
+        return input_path
+
     def render_subtitles(self, input_video_path: str, output_video_path: str, srt_path: str, mode: str, style: dict[str, str]) -> str:
         output_path = Path(output_video_path).expanduser().resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,11 +169,12 @@ class SubtitleRenderer:
         ass_path = output_path.with_suffix(".ass")
         self.write_ass_file(srt_path, str(ass_path), style)
         filter_spec = self.build_filter(str(ass_path), mode, style)
+        input_path = self._resolve_media_input_path(input_video_path)
         command = [
             "ffmpeg",
             "-y",
             "-i",
-            input_video_path,
+            str(input_path),
             "-vf",
             filter_spec,
             "-c:a",

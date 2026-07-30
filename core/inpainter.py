@@ -297,6 +297,27 @@ class VideoInpainter:
                 os.remove(output_path)
         return output_path
 
+    def _resolve_output_video_path(self, output_path: Path) -> Path:
+        if output_path.exists() and output_path.is_file():
+            return output_path
+
+        if output_path.exists() and output_path.is_dir():
+            video_candidates = sorted(
+                path
+                for path in output_path.rglob("*")
+                if path.is_file() and path.suffix.lower() in {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v"}
+            )
+            if video_candidates:
+                shutil.rmtree(output_path)
+                candidate = video_candidates[0]
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(candidate), str(output_path))
+                return output_path
+
+            shutil.rmtree(output_path)
+
+        return output_path
+
     def _blur_video(self, input_video_path: str, output_video_path: str) -> str:
         output_path = self._prepare_output_path(output_video_path)
         command = [
@@ -384,4 +405,7 @@ class VideoInpainter:
             fp16=fp16,
             enable_vram_cleanup=enable_vram_cleanup,
         )
-        return str(output_path)
+        resolved_output_path = self._resolve_output_video_path(output_path)
+        if not resolved_output_path.exists() or resolved_output_path.is_dir():
+            raise RuntimeError(f"ProPainter did not produce a valid video file at {resolved_output_path}")
+        return str(resolved_output_path)
