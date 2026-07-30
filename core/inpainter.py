@@ -93,6 +93,29 @@ class VideoInpainter:
 
         return torch.stack(frames), float(fps), (width, height), str(video_path)
 
+    def _get_propaint_resize_args(self, input_video_path: str) -> list[str]:
+        capture = cv2.VideoCapture(input_video_path)
+        if not capture.isOpened():
+            logger.warning("Could not inspect video dimensions for ProPainter resize; skipping resize cap")
+            return []
+
+        try:
+            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        finally:
+            capture.release()
+
+        if width <= 0 or height <= 0:
+            return []
+
+        max_side = max(width, height)
+        if max_side <= 1280:
+            return []
+
+        if width >= height:
+            return ["--width", str(1280)]
+        return ["--height", str(1280)]
+
     def _build_propaint_runner(self, input_video_path: str, mask_video_path: str, output_path: str) -> str:
         script_path = self.propainter_dir / "inference_propainter.py"
         args = [
@@ -106,10 +129,11 @@ class VideoInpainter:
             "--mask_dilation",
             str(self.inpaint_config.get("mask_dilation", 8)),
             "--subvideo_length",
-            str(self.inpaint_config.get("subvideo_length", 80)),
+            str(self.inpaint_config.get("subvideo_length", 30)),
             "--raft_iter",
-            str(self.inpaint_config.get("raft_iter", 20)),
+            str(self.inpaint_config.get("raft_iter", 10)),
         ]
+        args.extend(self._get_propaint_resize_args(input_video_path))
         if self.inpaint_config.get("fp16", False):
             args.append("--fp16")
 
@@ -122,6 +146,9 @@ class VideoInpainter:
             import cv2
             import torch
             import torchvision.io
+
+            import gc
+            import torch
 
             def custom_read_video(filename, *args, **kwargs):
                 video_path = filename if isinstance(filename, str) else kwargs.get('filename', '')
@@ -173,6 +200,8 @@ class VideoInpainter:
                 return vframes, fps, (height, width), str(video_path)
 
             torchvision.io.read_video = custom_read_video
+            gc.collect()
+            torch.cuda.empty_cache()
             sys.argv = {json.dumps(args)}
             runpy.run_path({json.dumps(str(script_path))}, run_name='__main__')
             """
