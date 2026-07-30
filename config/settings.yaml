@@ -8,9 +8,14 @@ whisper:
   device: "cuda"
   compute_type: "float16"
 
+openrouter:
+  api_key: "YOUR_OPENROUTER_API_KEY"
+  model_name: "deepseek/deepseek-v4-flash"
+  prompt_template: "Hãy viết lại kịch bản sau đây theo phong cách cuốn hút, giữ nguyên ý chính nhưng đổi câu từ để tránh trùng lặp nội dung. Chỉ trả về văn bản kịch bản mới:"
+
 gemini:
-  api_key: "YOUR_GEMINI_API_KEY"
-  model_name: "gemini-1.5-flash"
+  api_key: "YOUR_OPENROUTER_API_KEY"
+  model_name: "deepseek/deepseek-v4-flash"
   prompt_template: "Hãy viết lại kịch bản sau đây theo phong cách cuốn hút, giữ nguyên ý chính nhưng đổi câu từ để tránh trùng lặp nội dung. Chỉ trả về văn bản kịch bản mới:"
 
 tts:

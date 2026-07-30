@@ -64,9 +64,9 @@ def create_app() -> gr.Blocks:
 
                 auto_rewrite = gr.Checkbox(label="Rewrite script with Gemini", value=True)
                 gemini_api_key = gr.Textbox(
-                    label="Gemini API Key",
+                    label="OpenRouter API Key",
                     type="password",
-                    placeholder="Enter your Gemini API key here",
+                    placeholder="Enter your OpenRouter API key here",
                 )
                 voice_dropdown = gr.Dropdown(
                     label="TTS Voice",
@@ -116,7 +116,7 @@ def create_app() -> gr.Blocks:
             uploaded_value,
             online_links_value: Optional[str],
             auto_rewrite_value: bool,
-            gemini_api_key_value: Optional[str],
+            openrouter_api_key_value: Optional[str],
             voice_value: Optional[str],
             subtitle_font_value: Optional[str],
             subtitle_size_value: Optional[float],
@@ -137,7 +137,7 @@ def create_app() -> gr.Blocks:
                     input_source=input_source,
                     auto_rewrite=auto_rewrite_value,
                     custom_voice=_map_voice_label(voice_value),
-                    gemini_api_key=gemini_api_key_value,
+                    openrouter_api_key=openrouter_api_key_value,
                     subtitle_font=subtitle_font_value or "Arial",
                     subtitle_size=int(subtitle_size_value or 32),
                     subtitle_color=subtitle_color_value or "#FFFFFF",

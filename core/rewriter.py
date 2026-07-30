@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -10,36 +13,26 @@ logger = logging.getLogger(__name__)
 
 
 class LLMRewriter:
-    """Rewrite text using Google Gemini via the generative AI SDK."""
+    """Rewrite text using the OpenRouter API."""
 
     def __init__(self, config_path: Optional[str] = None) -> None:
         self.config_path = config_path or str(Path(__file__).resolve().parents[1] / "config" / "settings.yaml")
         self.settings = self._load_settings()
-        self.gemini_config = self.settings.get("gemini", {})
-        self.api_key = self.gemini_config.get("api_key", "")
-        self.model_name = self.gemini_config.get("model_name", "gemini-1.5-flash")
-        self.prompt_template = self.gemini_config.get("prompt_template", "")
-        self.model = None
+        self.openrouter_config = self.settings.get("openrouter", self.settings.get("gemini", {}))
+        self.api_key = self.openrouter_config.get("api_key", "")
+        self.model_name = self.openrouter_config.get("model_name", "deepseek/deepseek-v4-flash")
+        self.prompt_template = self.openrouter_config.get("prompt_template", "")
+        self.api_url = "https://openrouter.ai/api/v1/chat/completions"
         self._initialize_client()
 
     def _initialize_client(self) -> None:
-        """Initialize the Gemini client if a valid API key is provided."""
-        self.model = None
+        """Validate that an API key is available for the OpenRouter client."""
         api_key = (self.api_key or "").strip()
-        if not api_key or api_key == "YOUR_GEMINI_API_KEY":
-            return
-
-        try:
-            import google.generativeai as genai
-
-            genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel(self.model_name)
-        except Exception as exc:
-            logger.warning("Unable to initialize Gemini client: %s", exc)
+        self.ready = bool(api_key) and api_key != "YOUR_OPENROUTER_API_KEY"
 
     def set_api_key(self, api_key: Optional[str]) -> None:
-        """Set or update the Gemini API key and reinitialize the client."""
-        self.api_key = (api_key or "").strip() or (self.gemini_config.get("api_key", "") or "").strip()
+        """Set or update the OpenRouter API key."""
+        self.api_key = (api_key or "").strip() or (self.openrouter_config.get("api_key", "") or "").strip()
         self._initialize_client()
 
     def _load_settings(self) -> dict:
@@ -55,22 +48,39 @@ class LLMRewriter:
             raise RuntimeError("Invalid YAML configuration") from exc
 
     def rewrite(self, text: str) -> str:
-        """Rewrite input text via Gemini or raise a clear error if the API key is missing."""
+        """Rewrite input text via the OpenRouter API or raise a clear error if the API key is missing."""
         if not text or not text.strip():
             return text
 
-        if self.model is None:
+        if not self.ready:
             raise RuntimeError(
-                "Gemini API key is missing. Please enter a valid gemini API key before enabling AI rewrite."
+                "OpenRouter API key is missing. Please enter a valid OpenRouter API key before enabling AI rewrite."
             )
 
         try:
             prompt = f"{self.prompt_template}\n\n{text}"
-            response = self.model.generate_content(prompt)
-            rewritten_text = getattr(response, "text", None) or str(response)
+            payload = {
+                "model": self.model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+            }
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/11chucuncon/ReupAllInOne",
+                "X-Title": "AI Video Reup Studio",
+            }
+
+            request = urllib.request.Request(self.api_url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+            with urllib.request.urlopen(request, timeout=60) as response:
+                data = json.loads(response.read().decode("utf-8"))
+
+            rewritten_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             if rewritten_text and rewritten_text.strip():
                 return rewritten_text.strip()
-            logger.warning("Gemini returned empty content")
-            raise RuntimeError("Gemini returned empty content")
+            logger.warning("OpenRouter returned empty content")
+            raise RuntimeError("OpenRouter returned empty content")
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"OpenRouter API request failed: {exc.read().decode('utf-8', errors='ignore')}") from exc
         except Exception as exc:
-            raise RuntimeError(f"Gemini API call failed: {exc}") from exc
+            raise RuntimeError(f"OpenRouter API call failed: {exc}") from exc
