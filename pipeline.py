@@ -22,31 +22,6 @@ from core.subtitle_renderer import SubtitleRenderer
 logger = logging.getLogger(__name__)
 
 
-def sanitize_config(config: dict) -> dict:
-    """Normalize raw pipeline config values and ensure safe string values."""
-    clean_config: dict = {}
-    for key, value in (config or {}).items():
-        while isinstance(value, (set, tuple, list)):
-            value = list(value)[0] if len(value) > 0 else ""
-        clean_config[key] = value
-
-    lang = str(clean_config.get("target_lang", "vi")).strip().lower()
-    if "(" in lang:
-        lang = lang.split("(")[0].strip()
-
-    lang_map = {
-        "zh": "zh-CN",
-        "zh-cn": "zh-CN",
-        "zh-tw": "zh-TW",
-        "vi": "vi-VN",
-        "en": "en-US",
-        "ja": "ja-JP",
-        "ko": "ko-KR",
-    }
-    clean_config["target_lang"] = lang_map.get(lang, "zh-CN" if "zh" in lang else lang)
-    return clean_config
-
-
 class ReupPipeline:
     """Coordinate the full auto-reup video workflow."""
 
@@ -188,129 +163,6 @@ class ReupPipeline:
             })
         return translated_segments
 
-    def _build_segment_text(
-        self,
-        segment: dict,
-        translated_segments: list[dict],
-        tts_mode: str,
-    ) -> str:
-        if tts_mode == "Translated narration" and translated_segments:
-            matching = next(
-                (item for item in translated_segments if float(item.get("start", 0.0)) == float(segment.get("start", 0.0)) and float(item.get("end", 0.0)) == float(segment.get("end", 0.0))),
-                None,
-            )
-            if matching:
-                return str(matching.get("text", "")).strip()
-
-        return str(segment.get("text", "")).strip()
-
-    def _generate_segment_audio(
-        self,
-        segment_index: int,
-        text: str,
-        audio_path: Path,
-        target_language: str,
-        tts_engine_mode: str,
-        custom_voice: Optional[str],
-        reference_audio_path: Optional[str],
-        voice_preset: Optional[str],
-    ) -> str:
-        if not text:
-            raise ValueError("Segment text cannot be empty for TTS generation")
-        if str(tts_engine_mode or "").lower().startswith("local"):
-            asyncio.run(
-                self.tts_engine.clone_speech(
-                    text,
-                    str(audio_path),
-                    reference_audio_path=reference_audio_path,
-                    target_language=target_language,
-                    voice=custom_voice,
-                    voice_preset=voice_preset,
-                )
-            )
-        else:
-            asyncio.run(
-                self.tts_engine.generate_speech(
-                    text,
-                    str(audio_path),
-                    voice=custom_voice,
-                    engine_mode="edge",
-                    target_language=target_language,
-                )
-            )
-        return str(audio_path)
-
-    def _build_dubbed_audio(
-        self,
-        segments: list[dict],
-        translated_segments: list[dict],
-        tts_mode: str,
-        api_target_language: str,
-        tts_engine_mode: str,
-        custom_voice: Optional[str],
-        reference_audio_path: Optional[str],
-        voice_preset: Optional[str],
-    ) -> str:
-        if not segments:
-            raise RuntimeError("No segments available for dubbing audio generation")
-
-        piece_paths: list[Path] = []
-        last_end = 0.0
-
-        for index, segment in enumerate(segments, start=1):
-            start = float(segment.get("start", 0.0))
-            end = float(segment.get("end", start))
-            duration = max(0.0, end - start)
-            text = self._build_segment_text(segment, translated_segments, tts_mode)
-
-            if start > last_end + 0.01:
-                silence_path = self.temp_dir / f"silence_{index:04d}.mp3"
-                self.ffmpeg_processor.create_silence(duration=(start - last_end), output_path=str(silence_path))
-                piece_paths.append(silence_path)
-
-            if duration <= 0 or not text:
-                if duration > 0:
-                    silence_path = self.temp_dir / f"segment_silence_{index:04d}.mp3"
-                    self.ffmpeg_processor.create_silence(duration=duration, output_path=str(silence_path))
-                    piece_paths.append(silence_path)
-                last_end = end
-                continue
-
-            segment_audio_path = self.temp_dir / f"segment_{index:04d}.mp3"
-            self._generate_segment_audio(
-                index,
-                text,
-                segment_audio_path,
-                api_target_language,
-                tts_engine_mode,
-                custom_voice,
-                reference_audio_path,
-                voice_preset,
-            )
-
-            try:
-                raw_duration = self.ffmpeg_processor.get_media_duration(str(segment_audio_path))
-                if raw_duration > 0 and duration > 0 and abs(raw_duration - duration) > 0.05:
-                    adjusted_path = self.temp_dir / f"segment_{index:04d}_adjusted.mp3"
-                    speed_ratio = raw_duration / duration
-                    self.ffmpeg_processor.adjust_audio_speed(
-                        str(segment_audio_path),
-                        str(adjusted_path),
-                        speed_ratio,
-                    )
-                    piece_paths.append(adjusted_path)
-                else:
-                    piece_paths.append(Path(segment_audio_path))
-            except Exception as exc:
-                logger.warning("Segment %s audio adjustment failed: %s", index, exc)
-                piece_paths.append(Path(segment_audio_path))
-
-            last_end = end
-
-        final_dubbed_audio = self.temp_dir / "dubbed_audio.mp3"
-        self.ffmpeg_processor.concatenate_audio(piece_paths, str(final_dubbed_audio))
-        return str(final_dubbed_audio)
-
     def _write_srt_file(self, segments: Sequence[dict], output_path: Path) -> Path:
         """Write transcription segments to a .srt file in the temp directory."""
         output_file = Path(output_path)
@@ -353,40 +205,43 @@ class ReupPipeline:
         except Exception as exc:
             logger.warning("Cleanup failed: %s", exc)
 
-    def process_video(self, config: dict) -> str:
-        """Run the full video reup pipeline using a sanitized config dictionary."""
+    def process_video(
+        self,
+        input_source: Union[str, Sequence[str], None],
+        auto_rewrite: bool = True,
+        target_language: Optional[str] = "vi",
+        custom_voice: Optional[str] = None,
+        openrouter_api_key: Optional[str] = None,
+        tts_engine_mode: Optional[str] = "Edge-TTS Free (Tốc độ cao)",
+        tts_mode: Optional[str] = "Translated narration",
+        reference_audio_path: Optional[str] = None,
+        voice_preset: Optional[str] = None,
+        subtitle_mode: str = "Original",
+        inpaint_mode: str = "propainter",
+        auto_detect_subtitles: bool = True,
+        auto_remove_watermark: bool = True,
+        subtitle_font: Optional[str] = "DejaVu Sans",
+        subtitle_size: int = 32,
+        subtitle_color: str = "#FFFFFF",
+        subtitle_outline_color: str = "#000000",
+        subtitle_position: str = "bottom",
+        output_mode: str = "Keep original",
+        enable_upscale: bool = False,
+        upscale_factor: str = "2x (1080p Full HD)",
+        speed_factor: float = 1.05,
+        hflip: bool = True,
+        background_audio_path: Optional[str] = None,
+    ) -> str:
+        """Run the full video reup pipeline and return the output video path."""
         try:
-            config = sanitize_config(config or {})
-            logger.info("[INFO] Starting pipeline with config: %s", config)
+            logger.info("[INFO] Starting pipeline for input: %s", input_source)
 
-            target_language = config.get("target_lang", "vi")
+            target_language = self.sanitize_lang_code(target_language)
             api_target_language = self._normalize_language_for_api(target_language)
-            video_path = self._resolve_input_file(config.get("input_source"))
+
+            video_path = self._resolve_input_file(input_source)
             processed_video = Path(video_path)
             original_segments: list[dict] = []
-
-            auto_rewrite = bool(config.get("auto_rewrite", True))
-            custom_voice = config.get("custom_voice")
-            openrouter_api_key = config.get("openrouter_api_key")
-            tts_engine_mode = config.get("tts_engine_mode", "Edge-TTS Free (Tốc độ cao)")
-            tts_mode = config.get("tts_mode", "Translated narration")
-            reference_audio_path = config.get("reference_audio_path")
-            voice_preset = config.get("voice_preset")
-            subtitle_mode = str(config.get("subtitle_mode", "Original"))
-            inpaint_mode = str(config.get("inpaint_mode", "propainter"))
-            auto_detect_subtitles = bool(config.get("auto_detect_subtitles", True))
-            auto_remove_watermark = bool(config.get("auto_remove_watermark", True))
-            subtitle_font = config.get("subtitle_font", "DejaVu Sans")
-            subtitle_size = int(config.get("subtitle_size", 32) or 32)
-            subtitle_color = config.get("subtitle_color", "#FFFFFF")
-            subtitle_outline_color = config.get("subtitle_outline_color", "#000000")
-            subtitle_position = str(config.get("subtitle_position", "bottom"))
-            output_mode = str(config.get("output_mode", "Keep original"))
-            enable_upscale = bool(config.get("enable_upscale", False))
-            upscale_factor = str(config.get("upscale_factor", "2x (1080p Full HD)"))
-            speed_factor = float(config.get("speed_factor", 1.05) or 1.05)
-            hflip = bool(config.get("hflip", True))
-            background_audio_path = config.get("background_audio_path")
 
             logger.info("[INFO] Step 1/6: Detecting on-screen text with OCR...")
             ocr_data = self.ocr_processor.detect_text(str(processed_video))
@@ -456,14 +311,7 @@ class ReupPipeline:
             translated_segments = []
             if subtitle_mode in {"Translated", "Dual"} or (tts_mode == "Translated narration"):
                 logger.info("[INFO] Step 3/6: Translating OCR text to %s...", subtitle_language)
-                if auto_rewrite:
-                    try:
-                        self.rewriter.set_api_key(openrouter_api_key)
-                        translated_segments = self.rewriter.rewrite_segments(original_segments, api_target_language)
-                    except Exception as exc:
-                        logger.warning("AI segment rewrite failed, falling back to simple translation: %s", exc)
-                if not translated_segments:
-                    translated_segments = self._translate_segments(original_segments, subtitle_language, openrouter_api_key)
+                translated_segments = self._translate_segments(original_segments, subtitle_language, openrouter_api_key)
 
             if subtitle_mode == "Translated" and translated_segments:
                 subtitle_segments = translated_segments
@@ -497,17 +345,29 @@ class ReupPipeline:
             )
             narration_text = narration_text.strip() or ocr_data.get("full_text", "")
 
-            logger.info("[INFO] Step 4/6: Generating dubbed narration audio by segment...")
-            audio_output_path = self._build_dubbed_audio(
-                original_segments,
-                translated_segments,
-                tts_mode,
-                api_target_language,
-                tts_engine_mode,
-                custom_voice,
-                reference_audio_path,
-                voice_preset,
-            )
+            audio_output_path = self.temp_dir / "new_voice.mp3"
+            logger.info("[INFO] Step 4/6: Generating narration audio...")
+            if str(tts_engine_mode or "").lower().startswith("local"):
+                asyncio.run(
+                    self.tts_engine.clone_speech(
+                        narration_text,
+                        str(audio_output_path),
+                        reference_audio_path=reference_audio_path,
+                        target_language=api_target_language,
+                        voice=custom_voice,
+                        voice_preset=voice_preset,
+                    )
+                )
+            else:
+                asyncio.run(
+                    self.tts_engine.generate_speech(
+                        narration_text,
+                        str(audio_output_path),
+                        voice=custom_voice,
+                        engine_mode="edge",
+                        target_language=api_target_language,
+                    )
+                )
 
             logger.info("[INFO] Step 5/6: Burning subtitles into video...")
             styled_video_path = self.temp_dir / "styled_video.mp4"

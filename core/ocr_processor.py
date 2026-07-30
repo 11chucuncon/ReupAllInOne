@@ -22,7 +22,33 @@ class OCRProcessor:
         self.config_path = config_path or str(self.project_root / "config" / "settings.yaml")
         self.settings = self._load_settings()
         self.ocr_config = self.settings.get("ocr", {})
-        self.languages = self.ocr_config.get("languages", ["vi", "en", "zh", "ja", "ko"])
+        # Normalize configured languages into a clean list for EasyOCR usage
+        raw_langs = self.ocr_config.get("languages", ["vi", "en", "zh", "ja", "ko"])
+        if isinstance(raw_langs, (set, tuple)):
+            raw_langs = list(raw_langs)
+        elif isinstance(raw_langs, str):
+            raw_langs = [raw_langs]
+
+        easyocr_map = {
+            "zh": "zh_sim",
+            "zh-cn": "zh_sim",
+            "zh_cn": "zh_sim",
+            "zh-tw": "zh_tra",
+            "zh_tw": "zh_tra",
+            "vi": "vi",
+            "en": "en",
+            "ja": "ja",
+            "ko": "ko",
+        }
+
+        clean_langs: list[str] = []
+        for lang in (raw_langs or []):
+            l_str = str(lang).strip().lower()
+            mapped = easyocr_map.get(l_str, l_str)
+            if mapped not in clean_langs:
+                clean_langs.append(mapped)
+
+        self.languages = clean_langs if clean_langs else ["en"]
         self.sample_rate = int(self.ocr_config.get("sample_rate", 1))
 
     def _load_settings(self) -> dict[str, Any]:

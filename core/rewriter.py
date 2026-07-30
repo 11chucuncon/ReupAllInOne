@@ -105,29 +105,3 @@ class LLMRewriter:
             raise RuntimeError(f"OpenRouter API request failed: {exc.read().decode('utf-8', errors='ignore')}") from exc
         except Exception as exc:
             raise RuntimeError(f"OpenRouter API call failed: {exc}") from exc
-    def rewrite_segments(self, segments: list[dict], target_lang: str) -> list[dict]:
-        """Rewrite a list of segments while preserving timing metadata."""
-        if not segments:
-            return []
-        if not self.ready:
-            raise RuntimeError(
-                "OpenRouter API key is missing. Please enter a valid OpenRouter API key before enabling AI rewrite."
-            )
-
-        rewritten_segments: list[dict] = []
-        normalized_lang = self._normalize_language_for_api(target_lang)
-        for segment in segments:
-            original_text = str(segment.get("text", "")).strip()
-            if not original_text:
-                continue
-            try:
-                rewritten_text = self.rewrite(original_text, normalized_lang)
-            except Exception as exc:
-                logger.warning("Segment rewrite failed for text '%s': %s", original_text, exc)
-                rewritten_text = original_text
-            rewritten_segments.append({
-                "start": float(segment.get("start", 0.0)),
-                "end": float(segment.get("end", segment.get("start", 0.0))),
-                "text": rewritten_text,
-            })
-        return rewritten_segments

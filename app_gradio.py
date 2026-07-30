@@ -25,7 +25,7 @@ def _map_voice_label(voice_label: Optional[str]) -> Optional[str]:
     }.get(voice_label, voice_label)
 
 
-def _sanitize_lang_code(lang_input: Optional[object]) -> str:
+def sanitize_lang_code(lang_input: Optional[object]) -> str:
     while isinstance(lang_input, (set, list, tuple)):
         if len(lang_input) > 0:
             lang_input = next(iter(lang_input))
@@ -47,8 +47,6 @@ def _sanitize_lang_code(lang_input: Optional[object]) -> str:
         "ko": "ko-KR",
     }
     return lang_map.get(lang_str, lang_str)
-
-sanitize_lang_code = _sanitize_lang_code
 
 
 def _get_voice_choices(target_language: Optional[object]) -> list[str]:
@@ -261,33 +259,32 @@ def create_app() -> gr.Blocks:
                 inpaint_mode_internal = (
                     "propainter" if inpaint_tech_value and inpaint_tech_value.startswith("ProPainter") else "blur"
                 )
-                config_dict = {
-                    "input_source": input_source,
-                    "auto_rewrite": bool(auto_rewrite_value),
-                    "target_lang": _sanitize_lang_code(target_language_value),
-                    "custom_voice": _map_voice_label(voice_value),
-                    "openrouter_api_key": gemini_api_key_value,
-                    "tts_engine_mode": tts_engine_mode_value or "Edge-TTS Free (Tốc độ cao)",
-                    "tts_mode": tts_mode_value or "Translated narration",
-                    "reference_audio_path": reference_audio_value if isinstance(reference_audio_value, str) else None,
-                    "voice_preset": voice_preset_value,
-                    "subtitle_mode": subtitle_mode_internal,
-                    "inpaint_mode": inpaint_mode_internal,
-                    "auto_detect_subtitles": bool(auto_detect_subs_value),
-                    "auto_remove_watermark": bool(auto_remove_watermark_value),
-                    "subtitle_font": subtitle_font_value or "DejaVu Sans",
-                    "subtitle_size": int(subtitle_size_value or 32),
-                    "subtitle_color": subtitle_color_value or "#FFFFFF",
-                    "subtitle_outline_color": subtitle_outline_color_value or "#000000",
-                    "subtitle_position": (subtitle_position_value or "Bottom").lower(),
-                    "output_mode": output_ratio_value or "Keep original",
-                    "enable_upscale": bool(enable_upscale_value),
-                    "upscale_factor": upscale_factor_value or "2x (1080p Full HD)",
-                    "speed_factor": float(speed_value or 1.05),
-                    "hflip": bool(hflip_value),
-                    "background_audio_path": background_audio_value[0] if isinstance(background_audio_value, (list, tuple)) and background_audio_value else None,
-                }
-                result_path = pipeline.process_video(config_dict)
+                result_path = pipeline.process_video(
+                    input_source=input_source,
+                    auto_rewrite=auto_rewrite_value,
+                    target_language=_sanitize_lang_code(target_language_value),
+                    custom_voice=_map_voice_label(voice_value),
+                    openrouter_api_key=gemini_api_key_value,
+                    tts_engine_mode=tts_engine_mode_value or "Edge-TTS Free (Tốc độ cao)",
+                    tts_mode=tts_mode_value or "Translated narration",
+                    reference_audio_path=reference_audio_value if isinstance(reference_audio_value, str) else None,
+                    voice_preset=voice_preset_value,
+                    subtitle_mode=subtitle_mode_internal,
+                    inpaint_mode=inpaint_mode_internal,
+                    auto_detect_subtitles=bool(auto_detect_subs_value),
+                    auto_remove_watermark=bool(auto_remove_watermark_value),
+                    subtitle_font=subtitle_font_value or "DejaVu Sans",
+                    subtitle_size=int(subtitle_size_value or 32),
+                    subtitle_color=subtitle_color_value or "#FFFFFF",
+                    subtitle_outline_color=subtitle_outline_color_value or "#000000",
+                    subtitle_position=(subtitle_position_value or "Bottom").lower(),
+                    output_mode=output_ratio_value or "Keep original",
+                    enable_upscale=bool(enable_upscale_value),
+                    upscale_factor=upscale_factor_value or "2x (1080p Full HD)",
+                    speed_factor=float(speed_value or 1.05),
+                    hflip=bool(hflip_value),
+                    background_audio_path=background_audio_value[0] if isinstance(background_audio_value, (list, tuple)) and background_audio_value else None,
+                )
                 return (
                     gr.Video(value=input_source),
                     gr.Video(value=result_path),
