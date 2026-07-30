@@ -18,7 +18,9 @@ from config import (
     SUBTITLE_ASS_PATH,
     SUBTITLE_SRT_PATH,
     TEMP_DIR,
+    find_file_anywhere,
     initialize_workspace,
+    promote_file_to_destination,
     resolve_workspace_media_file,
 )
 
@@ -329,7 +331,14 @@ class ReupPipeline:
                 "shadow": subtitle_outline_color or "#000000",
             }
             self._write_srt_file(subtitle_segments, self.subtitle_srt_path)
-            self.subtitle_renderer.write_ass_file(str(self.subtitle_srt_path), str(self.subtitle_ass_path), subtitle_style)
+            subtitle_source_path = self.subtitle_srt_path
+            try:
+                subtitle_source_path = find_file_anywhere(self.temp_dir, ".srt")
+            except FileNotFoundError:
+                subtitle_source_path = self.subtitle_srt_path
+            if subtitle_source_path != self.subtitle_srt_path:
+                subtitle_source_path = promote_file_to_destination(subtitle_source_path, self.subtitle_srt_path, search_root=self.temp_dir, move=True)
+            self.subtitle_renderer.write_ass_file(str(subtitle_source_path), str(self.subtitle_ass_path), subtitle_style)
 
             rewritten_text: Optional[str] = None
             if auto_rewrite:
@@ -372,6 +381,16 @@ class ReupPipeline:
                     )
                 )
 
+            discovered_audio_path: Path | None = None
+            for extension in (".mp3", ".wav"):
+                try:
+                    discovered_audio_path = find_file_anywhere(self.temp_dir, extension)
+                    break
+                except FileNotFoundError:
+                    continue
+            if discovered_audio_path is not None and discovered_audio_path != self.audio_output_path:
+                discovered_audio_path = promote_file_to_destination(discovered_audio_path, self.audio_output_path, search_root=self.temp_dir, move=True)
+
             logger.info("[INFO] Step 5/6: Burning subtitles into video...")
             rendered_subtitle_video = self.subtitle_renderer.render_subtitles(
                 str(processed_video),
@@ -385,7 +404,7 @@ class ReupPipeline:
             logger.info("[INFO] Step 6/6: Final rendering with audio, speed, and ratio adjustments...")
             final_rendered = self.ffmpeg_processor.render_reup_video(
                 video_path=rendered_subtitle_video,
-                new_audio_path=str(self.audio_output_path),
+                new_audio_path=str(discovered_audio_path or self.audio_output_path),
                 output_path=str(output_video_path),
                 srt_path=None,
                 subtitle_text=None,

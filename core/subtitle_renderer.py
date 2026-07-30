@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from config import FINAL_VIDEO_PATH, TEMP_DIR, resolve_workspace_media_file
+from config import FINAL_VIDEO_PATH, TEMP_DIR, find_file_anywhere, promote_file_to_destination, resolve_workspace_media_file
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +83,20 @@ class SubtitleRenderer:
         return parsed
 
     def write_ass_file(self, srt_path: str, output_ass_path: str, style: dict[str, str]) -> Path:
-        output_path = Path(output_ass_path)
+        output_path = Path(output_ass_path).expanduser().resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        srt_input_path = Path(srt_path).expanduser().resolve()
+        if srt_input_path.exists() and srt_input_path.is_dir():
+            srt_source_path = find_file_anywhere(srt_input_path, ".srt")
+        elif srt_input_path.exists() and srt_input_path.is_file():
+            srt_source_path = srt_input_path
+        else:
+            srt_source_path = find_file_anywhere(self.workspace_temp_dir, ".srt")
+
+        if srt_source_path != srt_input_path:
+            promote_file_to_destination(srt_source_path, srt_input_path, search_root=self.workspace_temp_dir, move=True)
+
         subtitle_style = (
             f"Name=Default,"
             f"Fontname={style.get('font', 'DejaVu Sans')},"
@@ -135,13 +147,19 @@ class SubtitleRenderer:
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
         ]
 
-        for segment in self._parse_srt_blocks(srt_path):
+        for segment in self._parse_srt_blocks(str(srt_source_path)):
             safe_text = segment["text"].replace("\n", " ").replace("|", "\\|")
             ass_lines.append(
                 f"Dialogue: 0,{segment['start']},{segment['end']},Default,,0,0,0,,{safe_text}"
             )
 
         output_path.write_text("\n".join(ass_lines) + "\n", encoding="utf-8")
+        try:
+            discovered_ass = find_file_anywhere(self.workspace_temp_dir, ".ass")
+        except FileNotFoundError:
+            discovered_ass = output_path
+        if discovered_ass != output_path:
+            promote_file_to_destination(discovered_ass, output_path, search_root=self.workspace_temp_dir, move=True)
         return output_path
 
     def build_filter(self, ass_path: str, mode: str, style: dict[str, str]) -> str:

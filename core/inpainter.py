@@ -16,7 +16,7 @@ import cv2
 import torch
 import yaml
 
-from config import CLEANED_DIR, CLEANED_VIDEO_PATH, TEMP_DIR
+from config import CLEANED_DIR, CLEANED_VIDEO_PATH, TEMP_DIR, WORK_DIR, find_file_anywhere, promote_file_to_destination
 from core.cleaner import VideoCleaner
 
 logger = logging.getLogger(__name__)
@@ -306,28 +306,14 @@ class VideoInpainter:
             return output_path
 
         if output_path.exists() and output_path.is_dir():
-            video_candidates = sorted(
-                path
-                for path in output_path.rglob("*.mp4")
-                if path.is_file()
-            )
-            if video_candidates:
-                candidate = video_candidates[0]
-                temp_output_path = output_path.parent / "temp_cleaned.mp4"
-                if temp_output_path.exists():
-                    if temp_output_path.is_dir():
-                        shutil.rmtree(temp_output_path)
-                    else:
-                        temp_output_path.unlink(missing_ok=True)
-
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(candidate), str(temp_output_path))
-                if output_path.exists():
-                    shutil.rmtree(output_path, ignore_errors=True)
-                shutil.move(str(temp_output_path), str(output_path))
+            try:
+                candidate = find_file_anywhere(output_path, ".mp4")
+            except FileNotFoundError:
+                shutil.rmtree(output_path, ignore_errors=True)
                 return output_path
 
-            shutil.rmtree(output_path, ignore_errors=True)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            return promote_file_to_destination(candidate, output_path, search_root=output_path, move=True)
 
         return output_path
 
@@ -420,10 +406,17 @@ class VideoInpainter:
             fp16=fp16,
             enable_vram_cleanup=enable_vram_cleanup,
         )
-        resolved_output_path = self._resolve_output_video_path(output_path)
+
+        cleaned_search_root = WORK_DIR / "cleaned"
+        try:
+            discovered_video = find_file_anywhere(cleaned_search_root, ".mp4")
+        except FileNotFoundError:
+            discovered_video = self._resolve_output_video_path(output_path)
+
+        if discovered_video.exists() and discovered_video.is_file() and discovered_video != self.cleaned_video_path:
+            discovered_video = promote_file_to_destination(discovered_video, self.cleaned_video_path, search_root=cleaned_search_root, move=True)
+
+        resolved_output_path = discovered_video
         if not resolved_output_path.exists() or resolved_output_path.is_dir():
             raise RuntimeError(f"ProPainter did not produce a valid video file at {resolved_output_path}")
-        if resolved_output_path != self.cleaned_video_path:
-            shutil.copy2(str(resolved_output_path), str(self.cleaned_video_path))
-            resolved_output_path = self.cleaned_video_path
         return str(resolved_output_path)
