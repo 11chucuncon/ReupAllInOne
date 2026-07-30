@@ -200,38 +200,39 @@ class VideoInpainter:
         self._run_command(command)
         return str(output_path)
 
-    def _build_mask_video(self, mask_frames_dir: str, output_mask_video_path: str) -> str:
-        mask_dir = Path(mask_frames_dir).expanduser().resolve()
-        output_path = Path(output_mask_video_path).expanduser().resolve()
-        if not mask_dir.exists():
-            raise FileNotFoundError(f"Mask directory not found: {mask_dir}")
+    def _prepare_mask_sequence_directory(self, mask_source: str, output_dir: str) -> str:
+        source_path = Path(mask_source).expanduser().resolve()
+        output_path = Path(output_dir).expanduser().resolve()
+        output_path.mkdir(parents=True, exist_ok=True)
 
-        mask_files = sorted(mask_dir.glob("mask_*.png"))
-        if not mask_files:
-            raise RuntimeError(f"No mask frames were generated in {mask_dir}")
+        if source_path.is_dir():
+            mask_files = sorted(source_path.glob("mask_*.png"))
+            if not mask_files:
+                raise RuntimeError(f"No mask frames were generated in {source_path}")
+            for index, mask_file in enumerate(mask_files):
+                target_file = output_path / f"{index:05d}.png"
+                target_file.write_bytes(mask_file.read_bytes())
+            return str(output_path)
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        first_frame = cv2.imread(str(mask_files[0]), cv2.IMREAD_GRAYSCALE)
-        if first_frame is None:
-            raise RuntimeError(f"Could not read mask frame: {mask_files[0]}")
+        if source_path.suffix.lower() == ".mp4":
+            capture = cv2.VideoCapture(str(source_path))
+            if not capture.isOpened():
+                raise RuntimeError(f"Could not open mask video: {source_path}")
 
-        height, width = first_frame.shape
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(str(output_path), fourcc, 24.0, (width, height))
-        if not writer.isOpened():
-            raise RuntimeError(f"Could not create mask video writer for {output_path}")
+            frame_index = 0
+            while True:
+                ret, frame = capture.read()
+                if not ret:
+                    break
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                cv2.imwrite(str(output_path / f"{frame_index:05d}.png"), gray)
+                frame_index += 1
+            capture.release()
+            if frame_index == 0:
+                raise RuntimeError(f"No frames were extracted from mask video {source_path}")
+            return str(output_path)
 
-        try:
-            for mask_file in mask_files:
-                frame = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
-                if frame is None:
-                    continue
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-                writer.write(frame_bgr)
-        finally:
-            writer.release()
-
-        return str(output_path)
+        raise RuntimeError(f"Unsupported mask source: {mask_source}")
 
     def clean_video(
         self,
@@ -251,7 +252,9 @@ class VideoInpainter:
         if mask_video_path is None:
             mask_output_dir = output_path.parent / "propainter_masks"
             mask_output_dir_str = self.cleaner.generate_dynamic_mask_sequence(input_video_path, str(mask_output_dir))
-            mask_video_path = self._build_mask_video(mask_output_dir_str, str(output_path.parent / "propainter_masks.mp4"))
+            mask_video_path = self._prepare_mask_sequence_directory(mask_output_dir_str, str(output_path.parent / "propainter_masks_dir"))
+        else:
+            mask_video_path = self._prepare_mask_sequence_directory(mask_video_path, str(output_path.parent / "propainter_masks_dir"))
 
         self._run_propaint_inference(input_video_path, mask_video_path, str(output_path))
         return str(output_path)
