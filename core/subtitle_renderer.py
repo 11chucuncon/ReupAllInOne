@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from config import FINAL_VIDEO_PATH, TEMP_DIR
+from config import FINAL_VIDEO_PATH, TEMP_DIR, resolve_workspace_media_file
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +173,7 @@ class SubtitleRenderer:
         ass_path = self.workspace_temp_dir / "subtitle_overlay.ass"
         self.write_ass_file(srt_path, str(ass_path), style)
         filter_spec = self.build_filter(str(ass_path), mode, style)
-        input_path = self._resolve_media_input_path(input_video_path)
+        input_path = resolve_workspace_media_file(input_video_path, expected_suffix=".mp4")
         command = [
             "ffmpeg",
             "-y",

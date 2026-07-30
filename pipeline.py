@@ -19,6 +19,7 @@ from config import (
     SUBTITLE_SRT_PATH,
     TEMP_DIR,
     initialize_workspace,
+    resolve_workspace_media_file,
 )
 
 from core.downloader import VideoDownloader
@@ -283,18 +284,18 @@ class ReupPipeline:
             ocr_data = transcript_data
 
             logger.info("[INFO] Step 2/6: Running video cleanup with inpainting mode '%s'...", inpaint_mode)
-            processed_video = Path(
-                self.inpainter.clean_video(
-                    str(processed_video),
-                    str(self.cleaned_video_path),
-                    mode=inpaint_mode,
-                    subvideo_length=propainter_subvideo_length,
-                    raft_iter=propainter_raft_iter,
-                    resize_max_side=propainter_resize_max_side,
-                    fp16=propainter_fp16,
-                    enable_vram_cleanup=propainter_enable_vram_cleanup,
-                )
+            cleaned_video_path = self.inpainter.clean_video(
+                str(processed_video),
+                str(self.cleaned_video_path),
+                mode=inpaint_mode,
+                subvideo_length=propainter_subvideo_length,
+                raft_iter=propainter_raft_iter,
+                resize_max_side=propainter_resize_max_side,
+                fp16=propainter_fp16,
+                enable_vram_cleanup=propainter_enable_vram_cleanup,
             )
+            processed_video = resolve_workspace_media_file(cleaned_video_path, expected_suffix=".mp4")
+            processed_video = Path(processed_video)
 
             if not original_segments:
                 raise RuntimeError("No subtitle or transcription text was extracted from the audio.")
