@@ -308,19 +308,26 @@ class VideoInpainter:
         if output_path.exists() and output_path.is_dir():
             video_candidates = sorted(
                 path
-                for path in output_path.rglob("*")
-                if path.is_file() and path.suffix.lower() in {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v"}
+                for path in output_path.rglob("*.mp4")
+                if path.is_file()
             )
             if video_candidates:
                 candidate = video_candidates[0]
+                temp_output_path = output_path.parent / "temp_cleaned.mp4"
+                if temp_output_path.exists():
+                    if temp_output_path.is_dir():
+                        shutil.rmtree(temp_output_path)
+                    else:
+                        temp_output_path.unlink(missing_ok=True)
+
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(str(candidate), str(output_path))
-                for folder in output_path.parent.glob("*"):
-                    if folder.is_dir() and folder != output_path.parent:
-                        shutil.rmtree(folder, ignore_errors=True)
+                shutil.move(str(candidate), str(temp_output_path))
+                if output_path.exists():
+                    shutil.rmtree(output_path, ignore_errors=True)
+                shutil.move(str(temp_output_path), str(output_path))
                 return output_path
 
-            shutil.rmtree(output_path)
+            shutil.rmtree(output_path, ignore_errors=True)
 
         return output_path
 
