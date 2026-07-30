@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from urllib.request import urlretrieve
@@ -69,17 +70,64 @@ def validate_launch_prerequisites(root: Path) -> None:
         print("[WARN] GEMINI/OPENROUTER API key is not set in the environment; the app may fail during rewrite steps.")
 
 
-def start_localtunnel(port: int = 7860, subdomain: str = "reupstudio") -> subprocess.Popen[str] | None:
-    """Attempt to start a fixed localtunnel route for the Gradio server."""
+def try_gradio_share(demo, port: int = 7860) -> str | None:
+    """Try to launch Gradio with a public gradio.live share link for up to 10 seconds."""
+    print("[INFO] Attempting Gradio share launch...")
+
+    def launch_share() -> None:
+        demo.launch(
+            server_name="0.0.0.0",
+            server_port=port,
+            share=True,
+            debug=True,
+            prevent_thread_lock=True,
+            show_error=True,
+        )
+
+    thread = threading.Thread(target=launch_share, daemon=True)
+    thread.start()
+
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        share_url = getattr(demo, "share_url", None)
+        if share_url:
+            print("[INFO] Gradio share link created successfully.")
+            print("=" * 55)
+            print(f"PUBLIC LINK (GRADIO): {share_url}")
+            print("=" * 55)
+            return share_url
+        time.sleep(0.5)
+
     try:
-        command = ["npx", "--yes", "localtunnel", "--port", str(port), "--subdomain", subdomain]
-        print(f"[INFO] Starting localtunnel with: {' '.join(command)}")
-        return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    except FileNotFoundError:
-        print("[WARN] localtunnel could not be started because 'npx' is not available. Install Node.js/npm and run the command manually.")
-        return None
+        demo.close()
+    except Exception:
+        pass
+
+    return None
+
+
+def start_ngrok_tunnel(port: int = 7860) -> str | None:
+    """Fallback to pyngrok when gradio.live sharing is unavailable or drops."""
+    try:
+        from pyngrok import ngrok
+    except ModuleNotFoundError:
+        print("[INFO] Installing pyngrok for tunnel fallback...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "pyngrok"], check=False)
+        from pyngrok import ngrok
+
+    auth_token = os.environ.get("NGROK_AUTHTOKEN")
+    if auth_token:
+        ngrok.set_auth_token(auth_token)
+
+    try:
+        tunnel = ngrok.connect(port, "http")
+        public_url = getattr(tunnel, "public_url", None) or str(tunnel)
+        print("=" * 55)
+        print(f"PUBLIC LINK (NGROK): {public_url}")
+        print("=" * 55)
+        return public_url
     except Exception as exc:
-        print(f"[WARN] localtunnel launch failed: {exc}")
+        print(f"[WARN] Ngrok tunnel could not be started: {exc}")
         return None
 
 
@@ -108,20 +156,35 @@ def main() -> None:
 
     print("[INFO] Starting Gradio app on Colab...")
     demo = app_gradio.create_app()
-    tunnel_process = start_localtunnel(port=7860)
-    if tunnel_process is not None:
-        time.sleep(3)
-        print("[INFO] localtunnel started in the background. If it fails, run this manually:")
-        print("[INFO] npx --yes localtunnel --port 7860 --subdomain reupstudio")
+    demo.queue(default_concurrency_limit=1)
 
-    demo.queue(default_concurrency_limit=1).launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        share=False,
-        debug=True,
+    share_url = try_gradio_share(demo, port=7860)
+    if share_url:
+        print("[INFO] Gradio is running with the public share link above.")
+        while True:
+            time.sleep(60)
+        return
+
+    print("[INFO] Gradio share link was not available; falling back to Ngrok...")
+
+    launch_thread = threading.Thread(
+        target=lambda: demo.launch(
+            server_name="0.0.0.0",
+            server_port=7860,
+            share=False,
+            debug=True,
+            prevent_thread_lock=True,
+            show_error=True,
+        ),
+        daemon=True,
     )
-    if tunnel_process is not None:
-        tunnel_process.terminate()
+    launch_thread.start()
+    time.sleep(2)
+
+    start_ngrok_tunnel(port=7860)
+
+    while True:
+        time.sleep(60)
 
 
 if __name__ == "__main__":
