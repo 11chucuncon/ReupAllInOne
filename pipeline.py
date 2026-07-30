@@ -93,6 +93,7 @@ class ReupPipeline:
         input_source: Union[str, Sequence[str], None],
         auto_rewrite: bool = True,
         custom_voice: Optional[str] = None,
+        gemini_api_key: Optional[str] = None,
         subtitle_font: Optional[str] = "Arial",
         subtitle_size: int = 32,
         subtitle_color: str = "#FFFFFF",
@@ -117,6 +118,7 @@ class ReupPipeline:
 
             if auto_rewrite:
                 logger.info("[INFO] Step 3/5: Rewriting script with Gemini AI...")
+                self.rewriter.set_api_key(gemini_api_key)
                 rewritten_text = self.rewriter.rewrite(full_text)
             else:
                 logger.info("[INFO] Step 3/5: Using original transcript without rewrite")

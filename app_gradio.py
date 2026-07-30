@@ -6,6 +6,18 @@ from typing import Optional, Sequence
 import gradio as gr
 
 
+def _map_voice_label(voice_label: Optional[str]) -> Optional[str]:
+    """Convert the UI-friendly voice label to the actual Edge TTS voice identifier."""
+    if not voice_label:
+        return None
+    return {
+        "vi-VN-HoaiMyNeural (Nữ Miền Bắc - Truyền cảm)": "vi-VN-HoaiMyNeural",
+        "vi-VN-NamMinhNeural (Nam Miền Bắc - Trầm ấm)": "vi-VN-NamMinhNeural",
+        "en-US-AndrewMultilingualNeural (Giọng AI Đa ngữ chuẩn)": "en-US-AndrewMultilingualNeural",
+        "en-US-AvaMultilingualNeural (Nữ Đa ngữ)": "en-US-AvaMultilingualNeural",
+    }.get(voice_label, voice_label)
+
+
 def _resolve_input_source(uploaded_files: Optional[Sequence[str]], online_links: Optional[str]) -> str:
     """Resolve the first usable input source from uploads or pasted links."""
     if uploaded_files:
@@ -51,6 +63,11 @@ def create_app() -> gr.Blocks:
                         )
 
                 auto_rewrite = gr.Checkbox(label="Rewrite script with Gemini", value=True)
+                gemini_api_key = gr.Textbox(
+                    label="Gemini API Key",
+                    type="password",
+                    placeholder="Enter your Gemini API key here",
+                )
                 voice_dropdown = gr.Dropdown(
                     label="TTS Voice",
                     choices=[
@@ -99,6 +116,7 @@ def create_app() -> gr.Blocks:
             uploaded_value,
             online_links_value: Optional[str],
             auto_rewrite_value: bool,
+            gemini_api_key_value: Optional[str],
             voice_value: Optional[str],
             subtitle_font_value: Optional[str],
             subtitle_size_value: Optional[float],
@@ -118,7 +136,8 @@ def create_app() -> gr.Blocks:
                 result_path = pipeline.process_video(
                     input_source=input_source,
                     auto_rewrite=auto_rewrite_value,
-                    custom_voice=voice_value,
+                    custom_voice=_map_voice_label(voice_value),
+                    gemini_api_key=gemini_api_key_value,
                     subtitle_font=subtitle_font_value or "Arial",
                     subtitle_size=int(subtitle_size_value or 32),
                     subtitle_color=subtitle_color_value or "#FFFFFF",
@@ -149,6 +168,7 @@ def create_app() -> gr.Blocks:
                 local_uploads,
                 online_links,
                 auto_rewrite,
+                gemini_api_key,
                 voice_dropdown,
                 subtitle_font,
                 subtitle_size,

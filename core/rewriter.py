@@ -20,15 +20,27 @@ class LLMRewriter:
         self.model_name = self.gemini_config.get("model_name", "gemini-1.5-flash")
         self.prompt_template = self.gemini_config.get("prompt_template", "")
         self.model = None
+        self._initialize_client()
 
-        if self.api_key and self.api_key != "YOUR_GEMINI_API_KEY":
-            try:
-                import google.generativeai as genai
+    def _initialize_client(self) -> None:
+        """Initialize the Gemini client if a valid API key is provided."""
+        self.model = None
+        api_key = (self.api_key or "").strip()
+        if not api_key or api_key == "YOUR_GEMINI_API_KEY":
+            return
 
-                genai.configure(api_key=self.api_key)
-                self.model = genai.GenerativeModel(self.model_name)
-            except Exception as exc:
-                logger.warning("Unable to initialize Gemini client: %s", exc)
+        try:
+            import google.generativeai as genai
+
+            genai.configure(api_key=api_key)
+            self.model = genai.GenerativeModel(self.model_name)
+        except Exception as exc:
+            logger.warning("Unable to initialize Gemini client: %s", exc)
+
+    def set_api_key(self, api_key: Optional[str]) -> None:
+        """Set or update the Gemini API key and reinitialize the client."""
+        self.api_key = (api_key or "").strip() or (self.gemini_config.get("api_key", "") or "").strip()
+        self._initialize_client()
 
     def _load_settings(self) -> dict:
         """Load configuration from config/settings.yaml."""
@@ -43,13 +55,14 @@ class LLMRewriter:
             raise RuntimeError("Invalid YAML configuration") from exc
 
     def rewrite(self, text: str) -> str:
-        """Rewrite input text via Gemini or fall back to the original text on failure."""
+        """Rewrite input text via Gemini or raise a clear error if the API key is missing."""
         if not text or not text.strip():
             return text
 
         if self.model is None:
-            logger.warning("Gemini model is unavailable; returning original text")
-            return text
+            raise RuntimeError(
+                "Gemini API key is missing. Please enter a valid gemini API key before enabling AI rewrite."
+            )
 
         try:
             prompt = f"{self.prompt_template}\n\n{text}"
@@ -57,8 +70,7 @@ class LLMRewriter:
             rewritten_text = getattr(response, "text", None) or str(response)
             if rewritten_text and rewritten_text.strip():
                 return rewritten_text.strip()
-            logger.warning("Gemini returned empty content; using original text")
-            return text
+            logger.warning("Gemini returned empty content")
+            raise RuntimeError("Gemini returned empty content")
         except Exception as exc:
-            logger.warning("Gemini API call failed, using original text as fallback: %s", exc)
-            return text
+            raise RuntimeError(f"Gemini API call failed: {exc}") from exc
