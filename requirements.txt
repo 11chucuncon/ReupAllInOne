@@ -13,5 +13,7 @@ pyyaml
 pyngrok
 ultralytics
 opencv-python-headless
+av
+imageio[ffmpeg]
 transformers
 sentencepiece

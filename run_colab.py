@@ -57,6 +57,9 @@ def main() -> None:
     else:
         print("[WARN] CUDA GPU is not available. The app may run on CPU only.")
 
+    print("[INFO] Installing Colab-compatible media dependencies for ProPainter fallback...")
+    subprocess.run([sys.executable, "-m", "pip", "install", "av", "imageio[ffmpeg]"], check=False)
+
     sys.path.insert(0, str(ROOT))
 
     try:

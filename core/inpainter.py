@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
 import logging
 import shlex
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 from typing import Optional
 from urllib.request import urlretrieve
 
 import cv2
+import torch
 import yaml
 
 from core.cleaner import VideoCleaner
@@ -66,6 +69,89 @@ class VideoInpainter:
                 continue
             logger.info("Downloading ProPainter weight: %s", filename)
             urlretrieve(url, target_path)
+
+    def _read_frames_with_opencv(self, video_path: str) -> tuple[torch.Tensor, float, tuple[int, int], str]:
+        capture = cv2.VideoCapture(video_path)
+        if not capture.isOpened():
+            raise RuntimeError(f"Could not open video for ProPainter fallback: {video_path}")
+
+        frames: list[torch.Tensor] = []
+        fps = capture.get(cv2.CAP_PROP_FPS) or 24.0
+        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        while True:
+            ret, frame = capture.read()
+            if not ret:
+                break
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frames.append(torch.from_numpy(rgb_frame))
+
+        capture.release()
+        if not frames:
+            raise RuntimeError(f"No frames were decoded from {video_path}")
+
+        return torch.stack(frames), float(fps), (width, height), str(video_path)
+
+    def _build_propaint_runner(self, input_video_path: str, mask_video_path: str, output_path: str) -> str:
+        script_path = self.propainter_dir / "inference_propainter.py"
+        args = [
+            str(script_path),
+            "-i",
+            input_video_path,
+            "-m",
+            mask_video_path,
+            "-o",
+            str(output_path),
+            "--mask_dilation",
+            str(self.inpaint_config.get("mask_dilation", 8)),
+            "--subvideo_length",
+            str(self.inpaint_config.get("subvideo_length", 80)),
+            "--raft_iter",
+            str(self.inpaint_config.get("raft_iter", 20)),
+        ]
+        if self.inpaint_config.get("fp16", False):
+            args.append("--fp16")
+
+        wrapper_code = textwrap.dedent(
+            f"""
+            import json
+            import runpy
+            import sys
+
+            import cv2
+            import torch
+            import torchvision.io
+
+            def read_frame_from_videos(video_path):
+                capture = cv2.VideoCapture(video_path)
+                if not capture.isOpened():
+                    raise RuntimeError(f'Could not open video for ProPainter fallback: {{video_path}}')
+
+                frames = []
+                while True:
+                    ret, frame = capture.read()
+                    if not ret:
+                        break
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    frames.append(torch.from_numpy(rgb_frame))
+
+                capture.release()
+                if not frames:
+                    raise RuntimeError(f'No frames were decoded from {{video_path}}')
+
+                return torch.stack(frames)
+
+            torchvision.io.read_video = read_frame_from_videos
+            sys.argv = {json.dumps(args)}
+            runpy.run_path({json.dumps(str(script_path))}, run_name='__main__')
+            """
+        )
+        return wrapper_code
+
+    def _run_propaint_inference(self, input_video_path: str, mask_video_path: str, output_path: str) -> None:
+        wrapper_code = self._build_propaint_runner(input_video_path, mask_video_path, str(output_path))
+        self._run_command([sys.executable, "-c", wrapper_code], cwd=self.propainter_dir)
 
     def _blur_video(self, input_video_path: str, output_video_path: str) -> str:
         output_path = Path(output_video_path)
@@ -137,24 +223,5 @@ class VideoInpainter:
             mask_output_dir_str = self.cleaner.generate_dynamic_mask_sequence(input_video_path, str(mask_output_dir))
             mask_video_path = self._build_mask_video(mask_output_dir_str, str(output_path.parent / "propainter_masks.mp4"))
 
-        command = [
-            sys.executable,
-            str(self.propainter_dir / "inference_propainter.py"),
-            "-i",
-            input_video_path,
-            "-m",
-            mask_video_path,
-            "-o",
-            str(output_path),
-            "--mask_dilation",
-            str(self.inpaint_config.get("mask_dilation", 8)),
-            "--subvideo_length",
-            str(self.inpaint_config.get("subvideo_length", 80)),
-            "--raft_iter",
-            str(self.inpaint_config.get("raft_iter", 20)),
-        ]
-        if self.inpaint_config.get("fp16", False):
-            command.append("--fp16")
-
-        self._run_command(command, cwd=self.propainter_dir)
+        self._run_propaint_inference(input_video_path, mask_video_path, str(output_path))
         return str(output_path)
