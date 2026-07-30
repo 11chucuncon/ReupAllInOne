@@ -27,3 +27,8 @@ ffmpeg:
   hflip: true
   speed_factor: 1.05
   use_nvenc: true
+
+upscale:
+  model_path: "weights/realesr-animevideov3.pth"
+  device: "cuda"
+  temp_dir: "temp/upscale"

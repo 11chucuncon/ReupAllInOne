@@ -5,6 +5,9 @@ edge-tts
 TTS
 torch
 torchaudio
+realesrgan
+facexlib
+gfpgan
 gradio
 pyyaml
 pyngrok

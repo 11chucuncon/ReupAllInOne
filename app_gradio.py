@@ -161,6 +161,15 @@ def create_app() -> gr.Blocks:
                     choices=["Keep original", "Vertical 9:16 (Shorts/TikTok)", "Horizontal 16:9 (YouTube)"],
                     value="Keep original",
                 )
+                enable_upscale = gr.Checkbox(
+                    label="Bật AI Video Upscale (Nâng cấp độ phân giải)",
+                    value=False,
+                )
+                upscale_factor = gr.Radio(
+                    label="Mức độ Upscale",
+                    choices=["2x (1080p Full HD)", "4x (4K Ultra HD)"],
+                    value="2x (1080p Full HD)",
+                )
                 speed_slider = gr.Slider(label="Video Speed", minimum=0.8, maximum=1.5, value=1.05, step=0.01)
                 hflip_checkbox = gr.Checkbox(label="Flip horizontally", value=True)
                 background_audio = gr.File(label="Background Music (optional)", file_types=[".mp3", ".wav", ".m4a"])
@@ -181,6 +190,8 @@ def create_app() -> gr.Blocks:
             subtitle_outline_color_value: Optional[str],
             subtitle_position_value: Optional[str],
             output_ratio_value: Optional[str],
+            enable_upscale_value: bool,
+            upscale_factor_value: Optional[str],
             speed_value: Optional[float],
             hflip_value: Optional[bool],
             background_audio_value,
@@ -205,6 +216,8 @@ def create_app() -> gr.Blocks:
                     subtitle_outline_color=subtitle_outline_color_value or "#000000",
                     subtitle_position=(subtitle_position_value or "Bottom").lower(),
                     output_mode=output_ratio_value or "Keep original",
+                    enable_upscale=bool(enable_upscale_value),
+                    upscale_factor=upscale_factor_value or "2x (1080p Full HD)",
                     speed_factor=float(speed_value or 1.05),
                     hflip=bool(hflip_value),
                     background_audio_path=background_audio_value[0] if isinstance(background_audio_value, (list, tuple)) and background_audio_value else None,
@@ -260,6 +273,8 @@ def create_app() -> gr.Blocks:
                 subtitle_outline_color,
                 subtitle_position,
                 output_ratio,
+                enable_upscale,
+                upscale_factor,
                 speed_slider,
                 hflip_checkbox,
                 background_audio,

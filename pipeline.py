@@ -13,6 +13,7 @@ from core.ffmpeg_processor import FFmpegProcessor
 from core.rewriter import LLMRewriter
 from core.transcriber import WhisperTranscriber
 from core.tts_engine import TTSEngine
+from core.upscaler import VideoUpscaler
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class ReupPipeline:
         self.rewriter = LLMRewriter(config_path=self.config_path)
         self.tts_engine = TTSEngine(config_path=self.config_path)
         self.ffmpeg_processor = FFmpegProcessor(config_path=self.config_path)
+        self.video_upscaler = VideoUpscaler(config_path=self.config_path)
 
         self.temp_dir = self._resolve_project_path(self.app_config.get("temp_dir", "temp"), default="temp")
         self.output_dir = self._resolve_project_path(self.app_config.get("output_dir", "outputs"), default="outputs")
@@ -152,6 +154,8 @@ class ReupPipeline:
         subtitle_outline_color: str = "#000000",
         subtitle_position: str = "bottom",
         output_mode: str = "Keep original",
+        enable_upscale: bool = False,
+        upscale_factor: str = "2x (1080p Full HD)",
         speed_factor: float = 1.05,
         hflip: bool = True,
         background_audio_path: Optional[str] = None,
@@ -223,7 +227,17 @@ class ReupPipeline:
                 target_language=target_language,
             )
 
-            logger.info("[INFO] Step 6/5: Cleaning temporary files...")
+            if enable_upscale:
+                upscale_value = 2 if str(upscale_factor).startswith("2x") else 4
+                upscale_output = self.output_dir / f"reup_{timestamp}_upscaled_{upscale_value}x.mp4"
+                logger.info("[INFO] Step 6/6: Upscaling rendered video to %sx", upscale_value)
+                rendered_path = self.video_upscaler.upscale(
+                    input_video_path=str(rendered_path),
+                    output_video_path=str(upscale_output),
+                    scale=upscale_value,
+                )
+
+            logger.info("[INFO] Step 7/5: Cleaning temporary files...")
             self._clean_temp_files()
 
             absolute_output = str(Path(rendered_path).resolve())
