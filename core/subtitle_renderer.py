@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -143,8 +145,12 @@ class SubtitleRenderer:
         return f"ass='{escaped_path}'"
 
     def render_subtitles(self, input_video_path: str, output_video_path: str, srt_path: str, mode: str, style: dict[str, str]) -> str:
-        output_path = Path(output_video_path)
+        output_path = Path(output_video_path).expanduser().resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        if output_path.exists() and output_path.is_dir():
+            shutil.rmtree(output_path)
+        elif output_path.exists():
+            os.remove(output_path)
         ass_path = output_path.with_suffix(".ass")
         self.write_ass_file(srt_path, str(ass_path), style)
         filter_spec = self.build_filter(str(ass_path), mode, style)

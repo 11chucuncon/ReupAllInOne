@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shlex
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -285,9 +287,18 @@ class VideoInpainter:
         )
         self._run_command([sys.executable, "-c", wrapper_code], cwd=self.propainter_dir)
 
-    def _blur_video(self, input_video_path: str, output_video_path: str) -> str:
-        output_path = Path(output_video_path)
+    def _prepare_output_path(self, output_video_path: str) -> Path:
+        output_path = Path(output_video_path).expanduser().resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        if output_path.exists():
+            if output_path.is_dir():
+                shutil.rmtree(output_path)
+            else:
+                os.remove(output_path)
+        return output_path
+
+    def _blur_video(self, input_video_path: str, output_video_path: str) -> str:
+        output_path = self._prepare_output_path(output_video_path)
         command = [
             "ffmpeg",
             "-y",
@@ -348,8 +359,7 @@ class VideoInpainter:
         fp16: bool = True,
         enable_vram_cleanup: bool = True,
     ) -> str:
-        output_path = Path(output_video_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = self._prepare_output_path(output_video_path)
 
         if mode == "blur":
             return self._blur_video(input_video_path, str(output_path))
