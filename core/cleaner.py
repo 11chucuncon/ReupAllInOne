@@ -8,10 +8,7 @@ import cv2
 import numpy as np
 import yaml
 
-try:
-    from ultralytics import YOLO
-except Exception:  # pragma: no cover - optional dependency
-    YOLO = None
+from core.detector import YOLOv8SegmentationDetector
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +39,7 @@ class VideoCleaner:
         self.sample_rate = int(self.cleaner_config.get("sample_rate", 1))
         self.yolo_confidence = float(self.cleaner_config.get("yolo_confidence", 0.35))
         self.yolo_nms_threshold = float(self.cleaner_config.get("yolo_nms_threshold", 0.45))
-        self.yolo_model_name = self.cleaner_config.get("yolo_model", "yolov8n.pt")
-        self.yolo_model_path = Path(self.cleaner_config.get("yolo_model_path", "weights/yolov8n.pt"))
+        self.detector = YOLOv8SegmentationDetector(config_path=config_path)
 
     def _get_inpaint_flag(self) -> int:
         if self.inpaint_method == "ns":
@@ -100,56 +96,8 @@ class VideoCleaner:
             return path
         return Path(__file__).resolve().parents[1] / path
 
-    def _load_yolo_model(self) -> Optional[Any]:
-        if YOLO is None:
-            logger.warning("ultralytics is not installed; falling back to motion-only mask generation")
-            return None
-
-        model_path = self._resolve_model_path(self.yolo_model_path)
-        try:
-            if model_path.exists():
-                return YOLO(str(model_path))
-            return YOLO(self.yolo_model_name)
-        except Exception as exc:  # pragma: no cover - optional dependency
-            logger.warning("YOLOv8 model initialization failed: %s", exc)
-            return None
-
-    def _run_yolo(self, frame: np.ndarray, model: Optional[Any]) -> np.ndarray:
-        masks = np.zeros(frame.shape[:2], dtype=np.uint8)
-        if model is None:
-            return masks
-
-        try:
-            results = model(frame, stream=False, imgsz=1280, conf=self.yolo_confidence, iou=self.yolo_nms_threshold, verbose=False)
-        except Exception as exc:  # pragma: no cover - model runtime failure
-            logger.warning("YOLOv8 inference failed: %s", exc)
-            return masks
-
-        height, width = frame.shape[:2]
-        for result in results:
-            boxes = getattr(result, "boxes", None)
-            if boxes is None:
-                continue
-            for box in boxes:
-                coords = box.xyxy[0]
-                if hasattr(coords, "cpu"):
-                    coords = coords.cpu().numpy()
-                else:
-                    coords = np.asarray(coords)
-                x1, y1, x2, y2 = [int(float(v)) for v in coords]
-                x1 = max(0, min(width - 1, x1))
-                y1 = max(0, min(height - 1, y1))
-                x2 = max(0, min(width - 1, x2))
-                y2 = max(0, min(height - 1, y2))
-                if x2 <= x1 or y2 <= y1:
-                    continue
-                cv2.rectangle(masks, (x1, y1), (x2, y2), 255, -1)
-
-        if np.count_nonzero(masks) > 0:
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-            masks = cv2.morphologyEx(masks, cv2.MORPH_CLOSE, kernel, iterations=1)
-            masks = cv2.dilate(masks, kernel, iterations=1)
-        return masks
+    def _run_yolo(self, frame: np.ndarray) -> np.ndarray:
+        return self.detector.detect_mask(frame)
 
     def generate_dynamic_mask_sequence(self, input_video_path: str, output_mask_dir: str) -> str:
         input_path = Path(input_video_path).expanduser().resolve()
@@ -162,7 +110,6 @@ class VideoCleaner:
         if not capture.isOpened():
             raise RuntimeError(f"Could not open video file: {input_video_path}")
 
-        yolo_model = self._load_yolo_model()
         prev_gray: Optional[np.ndarray] = None
         frame_index = 0
         written_masks = 0
@@ -180,7 +127,7 @@ class VideoCleaner:
             blur = cv2.GaussianBlur(gray, (9, 9), 0)
 
             text_mask = self._extract_text_mask(frame)
-            yolo_mask = self._run_yolo(frame, yolo_model)
+            yolo_mask = self._run_yolo(frame)
             frame_mask = cv2.bitwise_or(text_mask, yolo_mask)
 
             if prev_gray is not None:
@@ -239,7 +186,6 @@ class VideoCleaner:
         frame_index = 0
         stability_mask: Optional[np.ndarray] = None
 
-        yolo_model = self._load_yolo_model()
         while True:
             ret, frame = capture.read()
             if not ret:
@@ -274,7 +220,7 @@ class VideoCleaner:
                 inpaint_mask = logo_mask
 
             text_mask = self._extract_text_mask(frame)
-            yolo_mask = self._run_yolo(frame, yolo_model)
+            yolo_mask = self._run_yolo(frame)
             combined_mask = cv2.bitwise_or(inpaint_mask, text_mask)
             combined_mask = cv2.bitwise_or(combined_mask, yolo_mask)
             if np.count_nonzero(combined_mask) > 0:

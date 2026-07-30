@@ -166,10 +166,9 @@ def create_app() -> gr.Blocks:
                 inpaint_tech = gr.Radio(
                     label="Công nghệ xóa chữ/watermark",
                     choices=[
-                        "ProPainter AI Inpainting (Xóa sạch 100% không mờ)",
-                        "Blur Fast (Làm mờ nhanh)",
+                        "ProPainter AI + YOLO Dynamic Tracking (SOTA)",
                     ],
-                    value="ProPainter AI Inpainting (Xóa sạch 100% không mờ)",
+                    value="ProPainter AI + YOLO Dynamic Tracking (SOTA)",
                 )
                 auto_detect_subs = gr.Checkbox(label="Tự động phát hiện & xóa Sub gốc", value=True)
                 auto_remove_watermark = gr.Checkbox(label="Tự động xóa Watermark/Logo góc video", value=True)
@@ -256,9 +255,7 @@ def create_app() -> gr.Blocks:
                 subtitle_mode_internal = (
                     "Dual" if subtitle_mode_value == "Sub Kép (Gốc + Dịch)" else "Translated"
                 )
-                inpaint_mode_internal = (
-                    "propainter" if inpaint_tech_value and inpaint_tech_value.startswith("ProPainter") else "blur"
-                )
+                inpaint_mode_internal = "propainter"
                 result_path = pipeline.process_video(
                     input_source=input_source,
                     auto_rewrite=auto_rewrite_value,
