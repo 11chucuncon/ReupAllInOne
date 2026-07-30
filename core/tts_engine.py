@@ -9,6 +9,8 @@ from typing import Optional
 import edge_tts
 import yaml
 
+from config import safe_file_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -176,10 +178,10 @@ class TTSEngine:
         if not text or not text.strip():
             raise ValueError("Text input cannot be empty")
 
-        output_file = Path(output_path)
+        output_file = safe_file_path(output_path)
         if output_file.suffix.lower() != ".mp3":
             output_file = output_file.with_suffix(".mp3")
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file = safe_file_path(output_file)
 
         reference_audio = self._resolve_reference_audio(reference_audio_path, voice_preset=voice_preset)
         if reference_audio is None:
@@ -221,10 +223,10 @@ class TTSEngine:
         if not text or not text.strip():
             raise ValueError("Text input cannot be empty")
 
-        output_file = Path(output_path)
+        output_file = safe_file_path(output_path)
         if output_file.suffix.lower() != ".mp3":
             output_file = output_file.with_suffix(".mp3")
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file = safe_file_path(output_file)
 
         if str(engine_mode or "").lower().startswith("local"):
             generated_path = await self.clone_speech(

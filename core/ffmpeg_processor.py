@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from config import safe_file_path
+
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -68,7 +70,7 @@ class FFmpegProcessor:
         subtitle_position: str,
     ) -> Path:
         """Create a simple ASS subtitle file for FFmpeg styling."""
-        subtitle_file = output_path.with_suffix(".ass")
+        subtitle_file = safe_file_path(output_path.with_suffix(".ass"))
         alignment = "2" if subtitle_position.lower() == "bottom" else "5"
         margin_v = "40" if subtitle_position.lower() == "bottom" else "0"
         content = f"""[Script Info]
@@ -108,14 +110,12 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
         """Render a reup video with optional flipping, speed changes, audio replacement, subtitles, and ratio adjustments."""
         input_video = Path(video_path).expanduser().resolve()
         input_audio = Path(new_audio_path).expanduser().resolve()
-        output_file = Path(output_path).expanduser().resolve()
+        output_file = safe_file_path(output_path)
 
         if not input_video.exists():
             raise FileNotFoundError(f"Input video not found: {video_path}")
         if not input_audio.exists():
             raise FileNotFoundError(f"Input audio not found: {new_audio_path}")
-
-        output_file.parent.mkdir(parents=True, exist_ok=True)
 
         command = ["ffmpeg", "-y", "-i", str(input_video), "-i", str(input_audio)]
         vf_parts = []
@@ -235,10 +235,9 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
     def adjust_audio_speed(self, input_path: str, output_path: str, speed_ratio: float) -> str:
         """Adjust the speed of an audio file using ffmpeg atempo filters."""
         input_file = Path(input_path).expanduser().resolve()
-        output_file = Path(output_path).expanduser().resolve()
+        output_file = safe_file_path(output_path)
         if not input_file.exists():
             raise FileNotFoundError(f"Input audio not found: {input_path}")
-        output_file.parent.mkdir(parents=True, exist_ok=True)
 
         if speed_ratio <= 0:
             raise ValueError("Speed ratio must be positive")
@@ -281,8 +280,7 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
 
     def create_silence(self, duration: float, output_path: str) -> str:
         """Create a silent audio file with the requested duration."""
-        output_file = Path(output_path).expanduser().resolve()
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file = safe_file_path(output_path)
         if duration <= 0.0:
             raise ValueError("Silence duration must be positive")
         command = [
@@ -311,8 +309,7 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
 
     def concatenate_audio(self, audio_paths: list[Path], output_path: str) -> str:
         """Concatenate multiple audio files into a single output file."""
-        output_file = Path(output_path).expanduser().resolve()
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file = safe_file_path(output_path)
         if not audio_paths:
             raise ValueError("No audio files provided for concatenation")
 

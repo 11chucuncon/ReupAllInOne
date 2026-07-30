@@ -22,6 +22,19 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v"}
 
 
+def safe_file_path(path_str: str | Path) -> Path:
+    """Ensure a target output path is a real file path by removing any stale directory with the same name."""
+    path = Path(path_str).expanduser().resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if path.exists() and path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+    elif path.exists():
+        path.unlink(missing_ok=True)
+
+    return path
+
+
 def find_file_anywhere(search_dir: str | Path, extension: str) -> Path:
     """Recursively find the latest modified file with the requested extension inside a directory tree."""
     normalized_extension = extension if extension.startswith(".") else f".{extension}"

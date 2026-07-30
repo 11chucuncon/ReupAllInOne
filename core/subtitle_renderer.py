@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from config import FINAL_VIDEO_PATH, TEMP_DIR, find_file_anywhere, promote_file_to_destination, resolve_workspace_media_file
+from config import FINAL_VIDEO_PATH, TEMP_DIR, find_file_anywhere, promote_file_to_destination, resolve_workspace_media_file, safe_file_path
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +83,7 @@ class SubtitleRenderer:
         return parsed
 
     def write_ass_file(self, srt_path: str, output_ass_path: str, style: dict[str, str]) -> Path:
-        output_path = Path(output_ass_path).expanduser().resolve()
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = safe_file_path(output_ass_path)
 
         srt_input_path = Path(srt_path).expanduser().resolve()
         if srt_input_path.exists() and srt_input_path.is_dir():
@@ -182,12 +181,7 @@ class SubtitleRenderer:
         return input_path
 
     def render_subtitles(self, input_video_path: str, output_video_path: str, srt_path: str, mode: str, style: dict[str, str]) -> str:
-        output_path = Path(output_video_path).expanduser().resolve()
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        if output_path.exists() and output_path.is_dir():
-            shutil.rmtree(output_path)
-        elif output_path.exists():
-            os.remove(output_path)
+        output_path = safe_file_path(output_video_path)
         ass_path = self.workspace_temp_dir / "subtitle_overlay.ass"
         self.write_ass_file(srt_path, str(ass_path), style)
         filter_spec = self.build_filter(str(ass_path), mode, style)

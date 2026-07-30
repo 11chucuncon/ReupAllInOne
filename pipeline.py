@@ -24,6 +24,7 @@ from config import (
     initialize_workspace,
     promote_file_to_destination,
     resolve_workspace_media_file,
+    safe_file_path,
 )
 
 from core.downloader import VideoDownloader
@@ -191,19 +192,11 @@ class ReupPipeline:
 
     def _remove_stale_output_path(self, output_path: Union[str, Path]) -> None:
         """Delete a stale file or directory that would block creating a subtitle output file."""
-        target_path = Path(output_path).expanduser().resolve()
-        if not target_path.exists():
-            return
-        if target_path.is_dir():
-            shutil.rmtree(target_path, ignore_errors=True)
-        else:
-            os.remove(target_path)
+        safe_file_path(output_path)
 
     def _write_srt_file(self, segments: Sequence[dict], output_path: Path) -> Path:
         """Write transcription segments to a .srt file in the temp directory."""
-        output_file = Path(output_path)
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        self._remove_stale_output_path(output_file)
+        output_file = safe_file_path(output_path)
 
         lines: list[str] = []
         for index, segment in enumerate(segments, start=1):
