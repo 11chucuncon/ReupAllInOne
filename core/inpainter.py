@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
+from urllib.request import urlretrieve
 
 import yaml
 
@@ -35,9 +37,42 @@ class VideoInpainter:
             logger.error("Invalid YAML configuration: %s", exc)
             raise
 
-    def _run_command(self, command: list[str]) -> None:
+    def _run_command(self, command: list[str], cwd: Optional[Path] = None) -> None:
         logger.info("Running inpainter command: %s", " ".join(shlex.quote(part) for part in command))
-        subprocess.run(command, check=True)
+        subprocess.run(command, check=True, cwd=str(cwd or self.project_root))
+
+    def _ensure_propaint_repository(self) -> Path:
+        if self.propainter_dir.exists() and (self.propainter_dir / "run_video.py").exists():
+            return self.propainter_dir
+
+        logger.info("ProPainter repository not found at %s; cloning it automatically", self.propainter_dir)
+        self.propainter_dir.parent.mkdir(parents=True, exist_ok=True)
+        self._run_command(["git", "clone", "https://github.com/sczhou/ProPainter.git", str(self.propainter_dir)])
+
+        run_video_script = self.propainter_dir / "run_video.py"
+        if not run_video_script.exists():
+            run_video_script.write_text(
+                """#!/usr/bin/env python3\nfrom __future__ import annotations\n\nimport argparse\nimport subprocess\nimport sys\nfrom pathlib import Path\n\nROOT = Path(__file__).resolve().parent\n\ndef main() -> None:\n    parser = argparse.ArgumentParser(description='High-quality ProPainter video inpainting wrapper')\n    parser.add_argument('--input', required=True)\n    parser.add_argument('--output', required=True)\n    parser.add_argument('--mask', required=True)\n    parser.add_argument('--model_path', default=str(ROOT / 'weights' / 'ProPainter.pth'))\n    parser.add_argument('--mask_dilation', type=int, default=8)\n    parser.add_argument('--subvideo_length', type=int, default=80)\n    parser.add_argument('--raft_iter', type=int, default=20)\n    parser.add_argument('--fp16', action='store_true')\n    args = parser.parse_args()\n\n    cmd = [sys.executable, str(ROOT / 'inference_propainter.py'), '-i', args.input, '-m', args.mask, '-o', args.output, '--mask_dilation', str(args.mask_dilation), '--subvideo_length', str(args.subvideo_length), '--raft_iter', str(args.raft_iter)]\n    if args.fp16:\n        cmd.append('--fp16')\n    subprocess.run(cmd, check=True, cwd=str(ROOT))\n\n\nif __name__ == '__main__':\n    main()\n""",
+                encoding="utf-8",
+            )
+
+        self._ensure_propaint_weights()
+        return self.propainter_dir
+
+    def _ensure_propaint_weights(self) -> None:
+        weights_dir = self.propainter_dir / "weights"
+        weights_dir.mkdir(parents=True, exist_ok=True)
+        required_weights = {
+            "ProPainter.pth": "https://github.com/sczhou/ProPainter/releases/download/v0.1.0/ProPainter.pth",
+            "recurrent_flow_completion.pth": "https://github.com/sczhou/ProPainter/releases/download/v0.1.0/recurrent_flow_completion.pth",
+            "raft-things.pth": "https://github.com/sczhou/ProPainter/releases/download/v0.1.0/raft-things.pth",
+        }
+        for filename, url in required_weights.items():
+            target_path = weights_dir / filename
+            if target_path.exists():
+                continue
+            logger.info("Downloading ProPainter weight: %s", filename)
+            urlretrieve(url, target_path)
 
     def _blur_video(self, input_video_path: str, output_video_path: str) -> str:
         output_path = Path(output_video_path)
@@ -69,15 +104,14 @@ class VideoInpainter:
         if mode == "blur":
             return self._blur_video(input_video_path, str(output_path))
 
-        if not self.propainter_dir.exists():
-            raise FileNotFoundError("ProPainter repository not found in core/ProPainter")
+        self._ensure_propaint_repository()
 
         if mask_video_path is None:
-            mask_path = output_path.parent / "propainter_mask.png"
-            mask_video_path = self.cleaner.generate_combined_mask(input_video_path, str(mask_path))
+            mask_output_dir = output_path.parent / "propainter_masks"
+            mask_video_path = self.cleaner.generate_dynamic_mask_sequence(input_video_path, str(mask_output_dir))
 
         command = [
-            "python",
+            sys.executable,
             str(self.propainter_dir / "run_video.py"),
             "--input",
             input_video_path,

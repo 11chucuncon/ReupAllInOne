@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import logging
-import math
 from pathlib import Path
 from typing import Any, Optional
 
 import cv2
 import numpy as np
 import yaml
+
+try:
+    from ultralytics import YOLO
+except Exception:  # pragma: no cover - optional dependency
+    YOLO = None
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +42,8 @@ class VideoCleaner:
         self.sample_rate = int(self.cleaner_config.get("sample_rate", 1))
         self.yolo_confidence = float(self.cleaner_config.get("yolo_confidence", 0.35))
         self.yolo_nms_threshold = float(self.cleaner_config.get("yolo_nms_threshold", 0.45))
-        self.text_score_threshold = float(self.cleaner_config.get("text_score_threshold", 0.5))
-        self.text_nms_threshold = float(self.cleaner_config.get("text_nms_threshold", 0.4))
-        self.yolo_config_path = Path(self.cleaner_config.get("yolo_config", "weights/yolov8n-watermark.cfg"))
-        self.yolo_weights_path = Path(self.cleaner_config.get("yolo_weights", "weights/yolov8n-watermark.weights"))
-        self.text_model_path = Path(self.cleaner_config.get("east_model", "weights/frozen_east_text_detection.pb"))
+        self.yolo_model_name = self.cleaner_config.get("yolo_model", "yolov8n.pt")
+        self.yolo_model_path = Path(self.cleaner_config.get("yolo_model_path", "weights/yolov8n.pt"))
 
     def _get_inpaint_flag(self) -> int:
         if self.inpaint_method == "ns":
@@ -67,12 +68,7 @@ class VideoCleaner:
             cv2.rectangle(logo_mask, (x, y), (x + w, y + h), 255, -1)
         return logo_mask
 
-    def _extract_text_mask(self, frame: np.ndarray, text_net: Optional[cv2.dnn_Net] = None) -> np.ndarray:
-        text_net = text_net if text_net is not None else self._load_text_model()
-        text_mask = self._run_text_detector(frame, text_net)
-        if np.count_nonzero(text_mask) > 0:
-            return text_mask
-
+    def _extract_text_mask(self, frame: np.ndarray) -> np.ndarray:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         gradient = cv2.morphologyEx(
@@ -104,138 +100,72 @@ class VideoCleaner:
             return path
         return Path(__file__).resolve().parents[1] / path
 
-    def _load_yolo_model(self) -> Optional[cv2.dnn_Net]:
-        config_path = self._resolve_model_path(self.yolo_config_path)
-        weights_path = self._resolve_model_path(self.yolo_weights_path)
-        if not config_path.exists() or not weights_path.exists():
-            logger.warning(
-                "YOLO watermark model weight files not found at %s and %s; falling back to motion detection only",
-                config_path,
-                weights_path,
-            )
+    def _load_yolo_model(self) -> Optional[Any]:
+        if YOLO is None:
+            logger.warning("ultralytics is not installed; falling back to motion-only mask generation")
             return None
-        net = cv2.dnn.readNetFromDarknet(str(config_path), str(weights_path))
-        net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-        net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-        return net
 
-    def _run_yolo(self, frame: np.ndarray, net: Optional[cv2.dnn_Net]) -> np.ndarray:
+        model_path = self._resolve_model_path(self.yolo_model_path)
+        try:
+            if model_path.exists():
+                return YOLO(str(model_path))
+            return YOLO(self.yolo_model_name)
+        except Exception as exc:  # pragma: no cover - optional dependency
+            logger.warning("YOLOv8 model initialization failed: %s", exc)
+            return None
+
+    def _run_yolo(self, frame: np.ndarray, model: Optional[Any]) -> np.ndarray:
         masks = np.zeros(frame.shape[:2], dtype=np.uint8)
-        if net is None:
+        if model is None:
             return masks
 
-        blob = cv2.dnn.blobFromImage(frame, 1 / 255.0, (640, 640), swapRB=True, crop=False)
-        net.setInput(blob)
-        layer_names = net.getUnconnectedOutLayersNames()
-        outputs = net.forward(layer_names)
+        try:
+            results = model(frame, stream=False, imgsz=1280, conf=self.yolo_confidence, iou=self.yolo_nms_threshold, verbose=False)
+        except Exception as exc:  # pragma: no cover - model runtime failure
+            logger.warning("YOLOv8 inference failed: %s", exc)
+            return masks
 
         height, width = frame.shape[:2]
-        boxes: list[tuple[int, int, int, int]] = []
-        confidences: list[float] = []
-
-        for output in outputs:
-            for detection in output:
-                scores = detection[5:]
-                if scores.size == 0:
+        for result in results:
+            boxes = getattr(result, "boxes", None)
+            if boxes is None:
+                continue
+            for box in boxes:
+                coords = box.xyxy[0]
+                if hasattr(coords, "cpu"):
+                    coords = coords.cpu().numpy()
+                else:
+                    coords = np.asarray(coords)
+                x1, y1, x2, y2 = [int(float(v)) for v in coords]
+                x1 = max(0, min(width - 1, x1))
+                y1 = max(0, min(height - 1, y1))
+                x2 = max(0, min(width - 1, x2))
+                y2 = max(0, min(height - 1, y2))
+                if x2 <= x1 or y2 <= y1:
                     continue
-                class_id = int(np.argmax(scores))
-                confidence = float(scores[class_id])
-                if confidence < self.yolo_confidence:
-                    continue
-                cx, cy, w, h = (detection[0:4] * np.array([width, height, width, height])).astype(int)
-                x = int(cx - w / 2)
-                y = int(cy - h / 2)
-                boxes.append((x, y, int(w), int(h)))
-                confidences.append(confidence)
+                cv2.rectangle(masks, (x1, y1), (x2, y2), 255, -1)
 
-        if boxes:
-            indices = cv2.dnn.NMSBoxes(boxes, confidences, self.yolo_confidence, self.yolo_nms_threshold)
-            for i in indices.flatten() if len(indices) else []:
-                x, y, w, h = boxes[i]
-                x0 = max(0, x)
-                y0 = max(0, y)
-                x1 = min(width, x + w)
-                y1 = min(height, y + h)
-                cv2.rectangle(masks, (x0, y0), (x1, y1), 255, -1)
+        if np.count_nonzero(masks) > 0:
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+            masks = cv2.morphologyEx(masks, cv2.MORPH_CLOSE, kernel, iterations=1)
+            masks = cv2.dilate(masks, kernel, iterations=1)
         return masks
 
-    def _load_text_model(self) -> Optional[cv2.dnn_Net]:
-        model_path = self._resolve_model_path(self.text_model_path)
-        if not model_path.exists():
-            logger.warning("EAST text detection model not found at %s; using OpenCV fallback text segmentation", model_path)
-            return None
-        net = cv2.dnn.readNet(str(model_path))
-        net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-        net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-        return net
-
-    def _decode_text_predictions(self, scores: np.ndarray, geometry: np.ndarray, score_thresh: float) -> tuple[list[tuple[int, int, int, int]], list[float]]:
-        rects: list[tuple[int, int, int, int]] = []
-        confidences: list[float] = []
-
-        height, width = scores.shape[2:4]
-        for y in range(height):
-            for x in range(width):
-                score = float(scores[0, 0, y, x])
-                if score < score_thresh:
-                    continue
-                offset_x = x * 4.0
-                offset_y = y * 4.0
-                angle = float(geometry[0, 4, y, x])
-                cos = math.cos(angle)
-                sin = math.sin(angle)
-                h = float(geometry[0, 0, y, x] + geometry[0, 2, y, x])
-                w = float(geometry[0, 1, y, x] + geometry[0, 3, y, x])
-                end_x = int(offset_x + cos * geometry[0, 1, y, x] + sin * geometry[0, 2, y, x])
-                end_y = int(offset_y - sin * geometry[0, 1, y, x] + cos * geometry[0, 2, y, x])
-                start_x = int(end_x - w)
-                start_y = int(end_y - h)
-                rects.append((start_x, start_y, int(w), int(h)))
-                confidences.append(score)
-        return rects, confidences
-
-    def _run_text_detector(self, frame: np.ndarray, net: Optional[cv2.dnn_Net]) -> np.ndarray:
-        if net is None:
-            return np.zeros(frame.shape[:2], dtype=np.uint8)
-
-        orig_h, orig_w = frame.shape[:2]
-        new_w, new_h = (320, 320)
-        blob = cv2.dnn.blobFromImage(frame, 1.0, (new_w, new_h), (123.68, 116.78, 103.94), True, False)
-        net.setInput(blob)
-        scores, geometry = net.forward(["feature_fusion/Conv_7/Sigmoid", "feature_fusion/concat_3"])
-
-        rects, confidences = self._decode_text_predictions(scores, geometry, self.text_score_threshold)
-        indices = cv2.dnn.NMSBoxes(rects, confidences, self.text_score_threshold, self.text_nms_threshold)
-        mask = np.zeros((orig_h, orig_w), dtype=np.uint8)
-        if len(indices):
-            for i in indices.flatten():
-                x, y, w, h = rects[i]
-                x0 = max(0, int(x * orig_w / new_w))
-                y0 = max(0, int(y * orig_h / new_h))
-                x1 = min(orig_w, int((x + w) * orig_w / new_w))
-                y1 = min(orig_h, int((y + h) * orig_h / new_h))
-                cv2.rectangle(mask, (x0, y0), (x1, y1), 255, -1)
-        return mask
-
-    def generate_combined_mask(self, input_video_path: str, output_mask_path: str) -> str:
+    def generate_dynamic_mask_sequence(self, input_video_path: str, output_mask_dir: str) -> str:
         input_path = Path(input_video_path).expanduser().resolve()
-        output_path = Path(output_mask_path).expanduser().resolve()
+        output_dir = Path(output_mask_dir).expanduser().resolve()
         if not input_path.exists():
             raise FileNotFoundError(f"Input video not found: {input_video_path}")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         capture = cv2.VideoCapture(str(input_path))
         if not capture.isOpened():
             raise RuntimeError(f"Could not open video file: {input_video_path}")
 
-        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        combined_mask = np.zeros((height, width), dtype=np.uint8)
-
-        yolo_net = self._load_yolo_model()
-        text_net = self._load_text_model()
+        yolo_model = self._load_yolo_model()
         prev_gray: Optional[np.ndarray] = None
         frame_index = 0
+        written_masks = 0
 
         while True:
             ret, frame = capture.read()
@@ -249,8 +179,8 @@ class VideoCleaner:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             blur = cv2.GaussianBlur(gray, (9, 9), 0)
 
-            text_mask = self._extract_text_mask(frame, text_net)
-            yolo_mask = self._run_yolo(frame, yolo_net)
+            text_mask = self._extract_text_mask(frame)
+            yolo_mask = self._run_yolo(frame, yolo_model)
             frame_mask = cv2.bitwise_or(text_mask, yolo_mask)
 
             if prev_gray is not None:
@@ -259,25 +189,30 @@ class VideoCleaner:
                 frame_mask = cv2.bitwise_or(frame_mask, logo_mask)
 
             prev_gray = blur
-            combined_mask = cv2.bitwise_or(combined_mask, frame_mask)
+
+            if np.count_nonzero(frame_mask) == 0:
+                height, width = frame.shape[:2]
+                pad = int(min(width, height) * 0.02)
+                bottom_strip = int(height * 0.12)
+                cv2.rectangle(frame_mask, (pad, height - bottom_strip), (width - pad, height - pad), 255, -1)
+                cv2.rectangle(frame_mask, (pad, pad), (pad + int(width * 0.18), pad + int(height * 0.12)), 255, -1)
+                cv2.rectangle(frame_mask, (width - pad - int(width * 0.18), pad), (width - pad, pad + int(height * 0.12)), 255, -1)
+
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+            frame_mask = cv2.morphologyEx(frame_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+            frame_mask = cv2.dilate(frame_mask, kernel, iterations=1)
+
+            mask_path = output_dir / f"mask_{frame_index:05d}.png"
+            cv2.imwrite(str(mask_path), frame_mask)
+            written_masks += 1
 
         capture.release()
 
-        if np.count_nonzero(combined_mask) == 0:
-            logger.warning("No text or logo regions were detected. Falling back to conservative subtitle/watermark hotspots.")
-            pad = int(min(width, height) * 0.02)
-            bottom_strip = int(height * 0.12)
-            cv2.rectangle(combined_mask, (pad, height - bottom_strip), (width - pad, height - pad), 255, -1)
-            cv2.rectangle(combined_mask, (pad, pad), (pad + int(width * 0.18), pad + int(height * 0.12)), 255, -1)
-            cv2.rectangle(combined_mask, (width - pad - int(width * 0.18), pad), (width - pad, pad + int(height * 0.12)), 255, -1)
+        if written_masks == 0:
+            raise RuntimeError(f"No frames were processed for mask generation from {input_video_path}")
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
-        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-        combined_mask = cv2.dilate(combined_mask, kernel, iterations=2)
-
-        cv2.imwrite(str(output_path), combined_mask)
-        logger.info("Combined detection mask saved to %s", output_path)
-        return str(output_path)
+        logger.info("Dynamic mask sequence saved to %s (%d masks)", output_dir, written_masks)
+        return str(output_dir)
 
     def remove_moving_watermark(
         self,
@@ -304,8 +239,7 @@ class VideoCleaner:
         frame_index = 0
         stability_mask: Optional[np.ndarray] = None
 
-        yolo_net = self._load_yolo_model()
-        text_net = self._load_text_model()
+        yolo_model = self._load_yolo_model()
         while True:
             ret, frame = capture.read()
             if not ret:
@@ -339,8 +273,8 @@ class VideoCleaner:
             else:
                 inpaint_mask = logo_mask
 
-            text_mask = self._extract_text_mask(frame, text_net)
-            yolo_mask = self._run_yolo(frame, yolo_net)
+            text_mask = self._extract_text_mask(frame)
+            yolo_mask = self._run_yolo(frame, yolo_model)
             combined_mask = cv2.bitwise_or(inpaint_mask, text_mask)
             combined_mask = cv2.bitwise_or(combined_mask, yolo_mask)
             if np.count_nonzero(combined_mask) > 0:

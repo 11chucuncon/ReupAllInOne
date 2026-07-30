@@ -35,9 +35,8 @@ cleaner:
   yolo_nms_threshold: 0.45
   text_score_threshold: 0.5
   text_nms_threshold: 0.4
-  yolo_config: "weights/yolov8n-watermark.cfg"
-  yolo_weights: "weights/yolov8n-watermark.weights"
-  east_model: "weights/frozen_east_text_detection.pb"
+  yolo_model: "yolov8n.pt"
+  yolo_model_path: "weights/yolov8n.pt"
 
 translation:
   provider: "local"

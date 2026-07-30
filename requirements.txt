@@ -11,7 +11,7 @@ basicsr
 gradio
 pyyaml
 pyngrok
-easyocr
+ultralytics
 opencv-python-headless
 transformers
 sentencepiece
