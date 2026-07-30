@@ -48,6 +48,15 @@ class FFmpegProcessor:
         blue = hex_value[4:6]
         return f"&H00{blue}{green}{red}&"
 
+    def _select_subtitle_font(self, subtitle_font: Optional[str], target_language: Optional[str]) -> str:
+        """Choose a Unicode-friendly font for subtitles based on the selected language."""
+        language_code = (target_language or subtitle_font or "vi").split()[0].split("(")[0].strip().lower()
+        if language_code in {"zh", "ja", "ko"}:
+            return "Noto Sans CJK SC"
+        if language_code in {"vi", "en", "th"}:
+            return "Noto Sans"
+        return subtitle_font or "DejaVu Sans"
+
     def _create_ass_subtitles(
         self,
         output_path: Path,
@@ -94,6 +103,7 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
         speed_factor: Optional[float] = None,
         hflip: bool = True,
         background_audio_path: Optional[str] = None,
+        target_language: Optional[str] = None,
     ) -> str:
         """Render a reup video with optional flipping, speed changes, audio replacement, subtitles, and ratio adjustments."""
         input_video = Path(video_path).expanduser().resolve()
@@ -135,7 +145,7 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
             )
 
         if subtitle_file:
-            safe_font = "DejaVu Sans" if not subtitle_font or subtitle_font.lower() == "arial" else subtitle_font
+            safe_font = self._select_subtitle_font(subtitle_font, target_language)
             subtitle_filter = (
                 f"subtitles='{subtitle_file.as_posix()}':"
                 f"force_style='Fontname={safe_font},Fontsize={subtitle_size},"

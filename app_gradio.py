@@ -15,7 +15,36 @@ def _map_voice_label(voice_label: Optional[str]) -> Optional[str]:
         "vi-VN-NamMinhNeural (Nam Miền Bắc - Trầm ấm)": "vi-VN-NamMinhNeural",
         "en-US-AndrewMultilingualNeural (Giọng AI Đa ngữ chuẩn)": "en-US-AndrewMultilingualNeural",
         "en-US-AvaMultilingualNeural (Nữ Đa ngữ)": "en-US-AvaMultilingualNeural",
+        "en-US-JennyNeural (Giọng nữ tiếng Anh)": "en-US-JennyNeural",
+        "en-US-GuyNeural (Giọng nam tiếng Anh)": "en-US-GuyNeural",
+        "en-US-ChristopherNeural (Giọng nam rõ ràng)": "en-US-ChristopherNeural",
+        "zh-CN-XiaoxiaoNeural (Giọng nữ tiếng Trung)": "zh-CN-XiaoxiaoNeural",
+        "ja-JP-NanamiNeural (Giọng nữ tiếng Nhật)": "ja-JP-NanamiNeural",
+        "ko-KR-SunHiNeural (Giọng nữ tiếng Hàn)": "ko-KR-SunHiNeural",
+        "th-TH-PremwadeeNeural (Giọng nữ tiếng Thái)": "th-TH-PremwadeeNeural",
     }.get(voice_label, voice_label)
+
+
+def _get_voice_choices(target_language: Optional[str]) -> list[str]:
+    """Return TTS voice options filtered by target language."""
+    language_map = {
+        "vi": [
+            "vi-VN-HoaiMyNeural (Nữ Miền Bắc - Truyền cảm)",
+            "vi-VN-NamMinhNeural (Nam Miền Bắc - Trầm ấm)",
+        ],
+        "en": [
+            "en-US-JennyNeural (Giọng nữ tiếng Anh)",
+            "en-US-GuyNeural (Giọng nam tiếng Anh)",
+            "en-US-ChristopherNeural (Giọng nam rõ ràng)",
+            "en-US-AndrewMultilingualNeural (Giọng AI Đa ngữ chuẩn)",
+            "en-US-AvaMultilingualNeural (Nữ Đa ngữ)",
+        ],
+        "zh": ["zh-CN-XiaoxiaoNeural (Giọng nữ tiếng Trung)"],
+        "ja": ["ja-JP-NanamiNeural (Giọng nữ tiếng Nhật)"],
+        "ko": ["ko-KR-SunHiNeural (Giọng nữ tiếng Hàn)"],
+        "th": ["th-TH-PremwadeeNeural (Giọng nữ tiếng Thái)"],
+    }
+    return language_map.get((target_language or "vi").split("(")[0].strip().split()[0].split("-")[0], language_map["vi"])
 
 
 def _resolve_input_source(uploaded_files: Optional[Sequence[str]], online_links: Optional[str]) -> str:
@@ -62,7 +91,19 @@ def create_app() -> gr.Blocks:
                             placeholder="https://www.youtube.com/watch?v=...\nhttps://www.tiktok.com/...",
                         )
 
-                auto_rewrite = gr.Checkbox(label="Rewrite script with Gemini", value=True)
+                auto_rewrite = gr.Checkbox(label="Rewrite script with AI", value=True)
+                target_language = gr.Dropdown(
+                    label="Target Language (Ngôn ngữ đích)",
+                    choices=[
+                        "vi (Tiếng Việt)",
+                        "en (Tiếng Anh - English)",
+                        "zh (Tiếng Trung - Chinese)",
+                        "ja (Tiếng Nhật - Japanese)",
+                        "ko (Tiếng Hàn - Korean)",
+                        "th (Tiếng Thái - Thai)",
+                    ],
+                    value="vi (Tiếng Việt)",
+                )
                 gemini_api_key = gr.Textbox(
                     label="OpenRouter API Key",
                     type="password",
@@ -70,12 +111,7 @@ def create_app() -> gr.Blocks:
                 )
                 voice_dropdown = gr.Dropdown(
                     label="TTS Voice",
-                    choices=[
-                        "vi-VN-HoaiMyNeural (Nữ Miền Bắc - Truyền cảm)",
-                        "vi-VN-NamMinhNeural (Nam Miền Bắc - Trầm ấm)",
-                        "en-US-AndrewMultilingualNeural (Giọng AI Đa ngữ chuẩn)",
-                        "en-US-AvaMultilingualNeural (Nữ Đa ngữ)",
-                    ],
+                    choices=_get_voice_choices("vi"),
                     value="vi-VN-HoaiMyNeural (Nữ Miền Bắc - Truyền cảm)",
                 )
                 queue_status = gr.Textbox(label="Queue Status", value="Idle", interactive=False)
@@ -116,6 +152,7 @@ def create_app() -> gr.Blocks:
             uploaded_value,
             online_links_value: Optional[str],
             auto_rewrite_value: bool,
+            target_language_value: Optional[str],
             openrouter_api_key_value: Optional[str],
             voice_value: Optional[str],
             subtitle_font_value: Optional[str],
@@ -136,6 +173,7 @@ def create_app() -> gr.Blocks:
                 result_path = pipeline.process_video(
                     input_source=input_source,
                     auto_rewrite=auto_rewrite_value,
+                    target_language=target_language_value,
                     custom_voice=_map_voice_label(voice_value),
                     openrouter_api_key=openrouter_api_key_value,
                     subtitle_font=subtitle_font_value or "Arial",
@@ -162,12 +200,22 @@ def create_app() -> gr.Blocks:
                     "Failed",
                 )
 
+        def update_voice_choices(target_language_value: Optional[str]):
+            return gr.Dropdown(choices=_get_voice_choices(target_language_value), value=_get_voice_choices(target_language_value)[0])
+
+        target_language.change(
+            update_voice_choices,
+            inputs=[target_language],
+            outputs=[voice_dropdown],
+        )
+
         submit_btn.click(
             process_video,
             inputs=[
                 local_uploads,
                 online_links,
                 auto_rewrite,
+                target_language,
                 gemini_api_key,
                 voice_dropdown,
                 subtitle_font,

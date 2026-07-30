@@ -47,8 +47,8 @@ class LLMRewriter:
             logger.error("Failed to parse settings YAML: %s", exc)
             raise RuntimeError("Invalid YAML configuration") from exc
 
-    def rewrite(self, text: str) -> str:
-        """Rewrite input text via the OpenRouter API or raise a clear error if the API key is missing."""
+    def rewrite(self, text: str, target_lang: str = "vi") -> str:
+        """Rewrite and translate input text via the OpenRouter API or raise a clear error if the API key is missing."""
         if not text or not text.strip():
             return text
 
@@ -58,7 +58,11 @@ class LLMRewriter:
             )
 
         try:
-            prompt = f"{self.prompt_template}\n\n{text}"
+            lang_code = (target_lang or "vi").split()[0].split("(")[0].strip()
+            prompt = (
+                f"Hãy dịch và viết lại kịch bản sau đây sang {lang_code} theo phong cách cuốn hút, tự nhiên, "
+                f"chuẩn văn phong video ngắn ngắn (Shorts/TikTok). Chỉ trả về nội dung kịch bản bằng {lang_code}, không kèm giải thích:\n\n{text}"
+            )
             payload = {
                 "model": self.model_name,
                 "messages": [{"role": "user", "content": prompt}],

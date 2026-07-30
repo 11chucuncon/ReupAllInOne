@@ -140,6 +140,7 @@ class ReupPipeline:
         self,
         input_source: Union[str, Sequence[str], None],
         auto_rewrite: bool = True,
+        target_language: Optional[str] = "vi",
         custom_voice: Optional[str] = None,
         openrouter_api_key: Optional[str] = None,
         subtitle_font: Optional[str] = "Arial",
@@ -167,7 +168,7 @@ class ReupPipeline:
             if auto_rewrite:
                 logger.info("[INFO] Step 3/5: Rewriting script with OpenRouter AI...")
                 self.rewriter.set_api_key(openrouter_api_key)
-                rewritten_text = self.rewriter.rewrite(full_text)
+                rewritten_text = self.rewriter.rewrite(full_text, target_lang=target_language or "vi")
             else:
                 logger.info("[INFO] Step 3/5: Using original transcript without rewrite")
                 rewritten_text = full_text
@@ -203,6 +204,7 @@ class ReupPipeline:
                 speed_factor=float(speed_factor or 1.05),
                 hflip=bool(hflip),
                 background_audio_path=background_audio_path,
+                target_language=target_language,
             )
 
             logger.info("[INFO] Step 6/5: Cleaning temporary files...")
