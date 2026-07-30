@@ -25,7 +25,7 @@ def _map_voice_label(voice_label: Optional[str]) -> Optional[str]:
     }.get(voice_label, voice_label)
 
 
-def sanitize_lang_code(lang_input: Optional[object]) -> str:
+def _sanitize_lang_code(lang_input: Optional[object]) -> str:
     while isinstance(lang_input, (set, list, tuple)):
         if len(lang_input) > 0:
             lang_input = next(iter(lang_input))
@@ -47,6 +47,8 @@ def sanitize_lang_code(lang_input: Optional[object]) -> str:
         "ko": "ko-KR",
     }
     return lang_map.get(lang_str, lang_str)
+
+sanitize_lang_code = _sanitize_lang_code
 
 
 def _get_voice_choices(target_language: Optional[object]) -> list[str]:
