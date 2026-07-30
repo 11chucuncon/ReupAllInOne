@@ -19,9 +19,11 @@ class TranslationEngine:
         self.config_path = config_path or str(self.project_root / "config" / "settings.yaml")
         self.settings = self._load_settings()
         self.translation_config = self.settings.get("translation", {})
-        self.provider = self.translation_config.get("provider", "gg")
+        self.provider = str(self.translation_config.get("provider", "gg")).lower()
         self.target_language = self.translation_config.get("target_language", "en")
         self.api_key = self.translation_config.get("api_key", "")
+        self.local_model = self.translation_config.get("local_model", "Helsinki-NLP/opus-mt-en-vi")
+        self.openrouter_model = self.translation_config.get("openrouter_model") or self.translation_config.get("model", "deepseek/deepseek-v4-flash")
 
     def _load_settings(self) -> dict[str, Any]:
         try:
@@ -51,7 +53,7 @@ class TranslationEngine:
         except ImportError as exc:
             raise RuntimeError("transformers is required for local translation") from exc
 
-        translator = pipeline("translation", model=self.translation_config.get("model", "Helsinki-NLP/opus-mt-en-vi"))
+        translator = pipeline("translation", model=self.local_model)
         translations = translator(text, max_length=4096)
         return translations[0]["translation_text"]
 
@@ -85,7 +87,7 @@ class TranslationEngine:
             f"Hãy dịch đoạn văn sau sang {target_language} một cách tự nhiên và ngắn gọn:\n\n{text}"
         )
         payload = {
-            "model": self.translation_config.get("model", "deepseek/deepseek-v4-flash"),
+            "model": self.openrouter_model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
         }

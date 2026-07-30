@@ -39,9 +39,12 @@ cleaner:
   yolo_model_path: "weights/yolov8n.pt"
 
 translation:
-  provider: "local"
+  provider: "openrouter"
   target_language: "en"
-  model: "Helsinki-NLP/opus-mt-en-vi"
+  api_key: "YOUR_OPENROUTER_API_KEY"
+  model: "deepseek/deepseek-v4-flash"
+  openrouter_model: "deepseek/deepseek-v4-flash"
+  local_model: "Helsinki-NLP/opus-mt-en-vi"
 
 inpaint:
   enabled: true
