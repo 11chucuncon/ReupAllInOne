@@ -279,7 +279,32 @@ class ReupPipeline:
             processed_video = Path(video_path)
             original_segments: list[dict] = []
 
-            logger.info("[INFO] Step 1/6: Transcribing audio for subtitles and narration...")
+            logger.info("[INFO] Step 1/5: Running YOLO scan for text and watermark detection...")
+            detected_boxes = self.inpainter.detect_watermark_and_text(str(processed_video))
+            self.cleaned_video_path.parent.mkdir(parents=True, exist_ok=True)
+            if detected_boxes:
+                logger.info(
+                    "[INFO] Detected %s object frames requiring inpainting. Building masks and invoking ProPainter...",
+                    len(detected_boxes),
+                )
+                cleaned_video_path = self.inpainter.clean_video(
+                    str(processed_video),
+                    str(self.cleaned_video_path),
+                    detected_boxes=detected_boxes,
+                    subvideo_length=propainter_subvideo_length,
+                    raft_iter=propainter_raft_iter,
+                    resize_max_side=propainter_resize_max_side,
+                    fp16=propainter_fp16,
+                    enable_vram_cleanup=propainter_enable_vram_cleanup,
+                )
+                processed_video = resolve_workspace_media_file(cleaned_video_path, expected_suffix=".mp4")
+                processed_video = Path(processed_video)
+            else:
+                logger.info("[INFO] No watermark or text objects found. Copying original video to cleaned_video.mp4")
+                shutil.copy2(str(processed_video), str(self.cleaned_video_path))
+                processed_video = Path(self.cleaned_video_path)
+
+            logger.info("[INFO] Step 2/5: Extracting subtitles from audio or fallback OCR/YOLO...")
             transcript_data = self.transcriber.transcribe(str(processed_video))
             original_segments = [
                 {
@@ -291,27 +316,6 @@ class ReupPipeline:
                 if str(segment.get("text", "")).strip()
             ]
             ocr_data = transcript_data
-
-            if not auto_remove_watermark or inpaint_mode == "off":
-                logger.info("[INFO] No watermark mask detected. Skipping ProPainter step.")
-                print("[INFO] No watermark mask detected. Skipping ProPainter step.")
-                self.cleaned_video_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(str(processed_video), str(self.cleaned_video_path))
-                processed_video = Path(self.cleaned_video_path)
-            else:
-                logger.info("[INFO] Step 2/6: Running video cleanup with inpainting mode '%s'...", inpaint_mode)
-                cleaned_video_path = self.inpainter.clean_video(
-                    str(processed_video),
-                    str(self.cleaned_video_path),
-                    mode=inpaint_mode,
-                    subvideo_length=propainter_subvideo_length,
-                    raft_iter=propainter_raft_iter,
-                    resize_max_side=propainter_resize_max_side,
-                    fp16=propainter_fp16,
-                    enable_vram_cleanup=propainter_enable_vram_cleanup,
-                )
-                processed_video = resolve_workspace_media_file(cleaned_video_path, expected_suffix=".mp4")
-                processed_video = Path(processed_video)
 
             if not original_segments:
                 raise RuntimeError("No subtitle or transcription text was extracted from the audio.")

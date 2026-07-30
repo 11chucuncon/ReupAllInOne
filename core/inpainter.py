@@ -9,10 +9,11 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 from urllib.request import urlretrieve
 
 import cv2
+import numpy as np
 import torch
 import yaml
 
@@ -356,6 +357,93 @@ class VideoInpainter:
 
         return False
 
+    def _boxes_from_mask(self, mask: np.ndarray) -> list[tuple[int, int, int, int]]:
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        boxes: list[tuple[int, int, int, int]] = []
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            if w <= 8 or h <= 8:
+                continue
+            boxes.append((x, y, w, h))
+        return boxes
+
+    def detect_watermark_and_text(self, input_video_path: str) -> list[list[tuple[int, int, int, int]]]:
+        input_path = Path(input_video_path).expanduser().resolve()
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input video not found: {input_video_path}")
+
+        capture = cv2.VideoCapture(str(input_path))
+        if not capture.isOpened():
+            raise RuntimeError(f"Could not open video for YOLO detection: {input_video_path}")
+
+        boxes_by_frame: list[list[tuple[int, int, int, int]]] = []
+        frame_index = 0
+
+        while True:
+            ret, frame = capture.read()
+            if not ret:
+                break
+
+            frame_index += 1
+            yolo_mask = self.cleaner._run_yolo(frame)
+            text_mask = self.cleaner._extract_text_mask(frame)
+            combined_mask = cv2.bitwise_or(yolo_mask, text_mask)
+            if np.count_nonzero(combined_mask) == 0:
+                continue
+
+            if self.cleaner._create_motion_mask is not None:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                blur = cv2.GaussianBlur(gray, (9, 9), 0)
+                mask_motion = self.cleaner._create_motion_mask(blur, blur)
+                combined_mask = cv2.bitwise_or(combined_mask, mask_motion)
+
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+            combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+            combined_mask = cv2.dilate(combined_mask, kernel, iterations=2)
+
+            frame_boxes = self._boxes_from_mask(combined_mask)
+            if frame_boxes:
+                boxes_by_frame.append(frame_boxes)
+
+        capture.release()
+        return boxes_by_frame
+
+    def _build_mask_sequence_from_boxes(
+        self,
+        input_video_path: str,
+        boxes_by_frame: list[list[tuple[int, int, int, int]]],
+        output_dir: str,
+    ) -> str:
+        input_path = Path(input_video_path).expanduser().resolve()
+        output_path = Path(output_dir).expanduser().resolve()
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        capture = cv2.VideoCapture(str(input_path))
+        if not capture.isOpened():
+            raise RuntimeError(f"Could not open video for mask generation: {input_video_path}")
+
+        frame_index = 0
+        while True:
+            ret, frame = capture.read()
+            if not ret:
+                break
+
+            if frame_index < len(boxes_by_frame):
+                mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+                for x, y, w, h in boxes_by_frame[frame_index]:
+                    cv2.rectangle(mask, (x, y), (x + w, y + h), 255, -1)
+            else:
+                mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+
+            mask_path = output_path / f"mask_{frame_index:05d}.png"
+            cv2.imwrite(str(mask_path), mask)
+            frame_index += 1
+
+        capture.release()
+        if frame_index == 0:
+            raise RuntimeError(f"No frames were processed for mask generation from {input_video_path}")
+        return str(output_path)
+
     def _prepare_output_path(self, output_video_path: str) -> Path:
         output_path = Path(output_video_path).expanduser().resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -437,6 +525,7 @@ class VideoInpainter:
         input_video_path: str,
         output_video_path: str,
         mode: str = "propainter",
+        detected_boxes: Optional[list[list[tuple[int, int, int, int]]]] = None,
         mask_video_path: Optional[str] = None,
         subvideo_length: int = 30,
         raft_iter: int = 10,
@@ -451,7 +540,7 @@ class VideoInpainter:
         if mode == "blur":
             return self._blur_video(input_video_path, str(output_path))
 
-        if not self._has_valid_mask(mask_video_path):
+        if not detected_boxes and not self._has_valid_mask(mask_video_path):
             logger.info("[INFO] No watermark mask detected. Skipping ProPainter step.")
             print("[INFO] No watermark mask detected. Skipping ProPainter step.")
             for target_path in {output_path, self.cleaned_video_path}:
@@ -462,7 +551,11 @@ class VideoInpainter:
         self._ensure_propaint_repository()
         resized_input_path = self._resize_video_for_inpainting(input_video_path, str(output_path.parent / "resized_input.mp4"), resize_max_side=resize_max_side)
 
-        if mask_video_path is None:
+        if detected_boxes:
+            mask_output_dir = output_path.parent / "propainter_masks"
+            mask_output_dir_str = self._build_mask_sequence_from_boxes(input_video_path, detected_boxes, str(mask_output_dir))
+            mask_video_path = self._prepare_mask_sequence_directory(mask_output_dir_str, str(output_path.parent / "propainter_masks_dir"))
+        elif mask_video_path is None:
             mask_output_dir = output_path.parent / "propainter_masks"
             mask_output_dir_str = self.cleaner.generate_dynamic_mask_sequence(input_video_path, str(mask_output_dir))
             mask_video_path = self._prepare_mask_sequence_directory(mask_output_dir_str, str(output_path.parent / "propainter_masks_dir"))
