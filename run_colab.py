@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.request import urlretrieve
 
@@ -68,6 +69,20 @@ def validate_launch_prerequisites(root: Path) -> None:
         print("[WARN] GEMINI/OPENROUTER API key is not set in the environment; the app may fail during rewrite steps.")
 
 
+def start_localtunnel(port: int = 7860, subdomain: str = "reupstudio") -> subprocess.Popen[str] | None:
+    """Attempt to start a fixed localtunnel route for the Gradio server."""
+    try:
+        command = ["npx", "--yes", "localtunnel", "--port", str(port), "--subdomain", subdomain]
+        print(f"[INFO] Starting localtunnel with: {' '.join(command)}")
+        return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    except FileNotFoundError:
+        print("[WARN] localtunnel could not be started because 'npx' is not available. Install Node.js/npm and run the command manually.")
+        return None
+    except Exception as exc:
+        print(f"[WARN] localtunnel launch failed: {exc}")
+        return None
+
+
 def main() -> None:
     """Launch the Gradio app in a Colab-friendly environment."""
     ensure_directories()
@@ -93,9 +108,20 @@ def main() -> None:
 
     print("[INFO] Starting Gradio app on Colab...")
     demo = app_gradio.create_app()
-    public_url = demo.queue().launch(share=True, debug=True)
-    print("[INFO] Public Gradio Link:")
-    print(public_url)
+    tunnel_process = start_localtunnel(port=7860)
+    if tunnel_process is not None:
+        time.sleep(3)
+        print("[INFO] localtunnel started in the background. If it fails, run this manually:")
+        print("[INFO] npx --yes localtunnel --port 7860 --subdomain reupstudio")
+
+    demo.queue(default_concurrency_limit=1).launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        share=False,
+        debug=True,
+    )
+    if tunnel_process is not None:
+        tunnel_process.terminate()
 
 
 if __name__ == "__main__":

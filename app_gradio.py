@@ -6,6 +6,17 @@ from typing import Optional, Sequence, Union
 import gradio as gr
 
 
+class ProgressReporter:
+    """Small wrapper around Gradio progress updates for long-running video tasks."""
+
+    def __init__(self, progress: Optional[gr.Progress] = None) -> None:
+        self.progress = progress
+
+    def update(self, value: float, desc: str) -> None:
+        if self.progress is not None:
+            self.progress(value, desc=desc)
+
+
 def _map_voice_label(voice_label: Optional[str]) -> Optional[str]:
     """Convert the UI-friendly voice label to the actual Edge TTS voice identifier."""
     if not voice_label:
@@ -280,16 +291,21 @@ def create_app() -> gr.Blocks:
             speed_value: Optional[float],
             hflip_value: Optional[bool],
             background_audio_value,
+            progress: Optional[gr.Progress] = None,
         ) -> tuple[gr.Video, gr.Video, str, str]:
+            reporter = ProgressReporter(progress)
             try:
                 from pipeline import ReupPipeline
 
+                reporter.update(0.05, "Resolving input source...")
                 input_source = _resolve_input_source(uploaded_value, online_links_value)
+                reporter.update(0.15, "Preparing workspace and pipeline...")
                 pipeline = ReupPipeline()
                 subtitle_mode_internal = (
                     "Dual" if subtitle_mode_value == "Sub Kép (Gốc + Dịch)" else "Translated"
                 )
                 inpaint_mode_internal = "propainter"
+                reporter.update(0.35, "Running video processing pipeline...")
                 result_path = pipeline.process_video(
                     input_source=input_source,
                     auto_rewrite=auto_rewrite_value,
@@ -321,6 +337,7 @@ def create_app() -> gr.Blocks:
                     hflip=bool(hflip_value),
                     background_audio_path=background_audio_value[0] if isinstance(background_audio_value, (list, tuple)) and background_audio_value else None,
                 )
+                reporter.update(0.95, "Finalizing output video...")
                 return (
                     gr.Video(value=input_source),
                     gr.Video(value=result_path),
@@ -328,6 +345,7 @@ def create_app() -> gr.Blocks:
                     "Completed",
                 )
             except Exception as exc:
+                reporter.update(1.0, "Processing failed")
                 return (
                     gr.Video(value=None),
                     gr.Video(value=None),
@@ -397,4 +415,4 @@ def create_app() -> gr.Blocks:
 
 if __name__ == "__main__":
     demo = create_app()
-    demo.launch(share=True, debug=True)
+    demo.queue(default_concurrency_limit=1).launch(share=True, debug=True)
