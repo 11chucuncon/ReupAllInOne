@@ -24,10 +24,27 @@ class OCRProcessor:
         self.ocr_config = self.settings.get("ocr", {})
         # Normalize configured languages into a clean list for EasyOCR usage
         raw_langs = self.ocr_config.get("languages", ["vi", "en", "zh", "ja", "ko"])
+        # Ensure raw_langs is a plain list and not a set/tuple/string or other unexpected type
         if isinstance(raw_langs, (set, tuple)):
             raw_langs = list(raw_langs)
         elif isinstance(raw_langs, str):
             raw_langs = [raw_langs]
+        elif not isinstance(raw_langs, list):
+            raw_langs = ["en"]
+
+        # Clean nested/wrapped items so each element is a simple string
+        cleaned_items: list[str] = []
+        for item in raw_langs:
+            # Unwrap nested containers (set/list/tuple) until we reach a primitive
+            while isinstance(item, (set, list, tuple)):
+                if len(item) > 0:
+                    # Convert set/tuple to list so we can index deterministically
+                    item = list(item)[0]
+                else:
+                    item = "en"
+            cleaned_items.append(str(item))
+
+        raw_langs = cleaned_items
 
         easyocr_map = {
             "zh": "zh_sim",
