@@ -2,7 +2,6 @@ yt-dlp
 faster-whisper
 google-generativeai
 edge-tts
-coqui-tts
 torch
 torchaudio
 realesrgan
