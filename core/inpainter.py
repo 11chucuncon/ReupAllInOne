@@ -49,7 +49,26 @@ class VideoInpainter:
 
     def _run_command(self, command: list[str], cwd: Optional[Path] = None) -> None:
         logger.info("Running inpainter command: %s", " ".join(shlex.quote(part) for part in command))
-        subprocess.run(command, check=True, cwd=str(cwd or self.project_root))
+        try:
+            completed = subprocess.run(command, check=True, cwd=str(cwd or self.project_root), capture_output=True, text=True)
+        except subprocess.CalledProcessError as exc:
+            stderr_output = exc.stderr or ""
+            stdout_output = exc.stdout or ""
+            logger.error("Inpainter command failed with exit code %s", exc.returncode)
+            if stdout_output:
+                logger.error("Inpainter stdout:\n%s", stdout_output)
+            if stderr_output:
+                logger.error("Inpainter stderr:\n%s", stderr_output)
+            print("[ERROR] ProPainter command failed")
+            if stdout_output:
+                print(stdout_output)
+            if stderr_output:
+                print(stderr_output)
+            raise
+        if completed.stdout:
+            logger.info("Inpainter stdout:\n%s", completed.stdout)
+        if completed.stderr:
+            logger.info("Inpainter stderr:\n%s", completed.stderr)
 
     def _ensure_propaint_repository(self) -> Path:
         self.propainter_dir = (self.project_root / "core" / "ProPainter").resolve()
@@ -161,9 +180,10 @@ class VideoInpainter:
         if max_side <= resize_max_side:
             return []
 
+        safe_resize = max(320, int(resize_max_side * 0.75))
         if width >= height:
-            return ["--width", str(resize_max_side)]
-        return ["--height", str(resize_max_side)]
+            return ["--width", str(safe_resize)]
+        return ["--height", str(safe_resize)]
 
     def _build_propaint_runner(
         self,
@@ -279,6 +299,22 @@ class VideoInpainter:
         fp16: bool = True,
         enable_vram_cleanup: bool = True,
     ) -> None:
+        mask_path = Path(mask_video_path).expanduser().resolve()
+        if not mask_path.exists():
+            logger.warning("Mask file does not exist before ProPainter run: %s", mask_path)
+            print(f"[WARNING] Mask file missing: {mask_path}")
+            raise FileNotFoundError(f"Mask file does not exist: {mask_path}")
+
+        if enable_vram_cleanup:
+            try:
+                import gc
+                import torch as torch_module
+
+                gc.collect()
+                torch_module.cuda.empty_cache()
+            except Exception as exc:
+                logger.warning("VRAM cleanup failed: %s", exc)
+
         wrapper_code = self._build_propaint_runner(
             input_video_path,
             mask_video_path,
@@ -289,7 +325,19 @@ class VideoInpainter:
             fp16=fp16,
             enable_vram_cleanup=enable_vram_cleanup,
         )
-        self._run_command([sys.executable, "-c", wrapper_code], cwd=self.propainter_dir)
+        try:
+            self._run_command([sys.executable, "-c", wrapper_code], cwd=self.propainter_dir)
+        except Exception:
+            if enable_vram_cleanup:
+                try:
+                    import gc
+                    import torch as torch_module
+
+                    gc.collect()
+                    torch_module.cuda.empty_cache()
+                except Exception:
+                    pass
+            raise
 
     def _prepare_output_path(self, output_video_path: str) -> Path:
         output_path = Path(output_video_path).expanduser().resolve()
@@ -396,22 +444,38 @@ class VideoInpainter:
         else:
             mask_video_path = self._prepare_mask_sequence_directory(mask_video_path, str(output_path.parent / "propainter_masks_dir"))
 
-        self._run_propaint_inference(
-            input_video_path,
-            mask_video_path,
-            str(output_path),
-            subvideo_length=subvideo_length,
-            raft_iter=raft_iter,
-            resize_max_side=resize_max_side,
-            fp16=fp16,
-            enable_vram_cleanup=enable_vram_cleanup,
-        )
+        try:
+            self._run_propaint_inference(
+                resized_input_path,
+                mask_video_path,
+                str(output_path),
+                subvideo_length=subvideo_length,
+                raft_iter=raft_iter,
+                resize_max_side=resize_max_side,
+                fp16=fp16,
+                enable_vram_cleanup=enable_vram_cleanup,
+            )
+        except Exception as exc:
+            logger.warning("[WARNING] ProPainter execution failed. Fallback to original video.")
+            print("[WARNING] ProPainter execution failed. Fallback to original video.")
+            if Path(input_video_path).exists():
+                self.cleaned_video_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(input_video_path), str(self.cleaned_video_path))
+                return str(self.cleaned_video_path)
+            raise RuntimeError(f"ProPainter failed and source video is missing: {input_video_path}") from exc
 
         cleaned_search_root = WORK_DIR / "cleaned"
         try:
             discovered_video = find_file_anywhere(cleaned_search_root, ".mp4")
         except FileNotFoundError:
             discovered_video = self._resolve_output_video_path(output_path)
+
+        if not discovered_video.exists() or discovered_video.is_dir():
+            logger.warning("[WARNING] ProPainter execution failed. Fallback to original video.")
+            print("[WARNING] ProPainter execution failed. Fallback to original video.")
+            self.cleaned_video_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(input_video_path), str(self.cleaned_video_path))
+            return str(self.cleaned_video_path)
 
         if discovered_video.exists() and discovered_video.is_file() and discovered_video != self.cleaned_video_path:
             discovered_video = promote_file_to_destination(discovered_video, self.cleaned_video_path, search_root=cleaned_search_root, move=True)
