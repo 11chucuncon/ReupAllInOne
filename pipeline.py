@@ -202,8 +202,35 @@ class ReupPipeline:
 
             video_path = self._resolve_input_file(input_source)
             processed_video = Path(video_path)
+            original_segments: list[dict] = []
 
-            logger.info("[INFO] Step 1/6: Running video cleanup with inpainting mode '%s'...", inpaint_mode)
+            logger.info("[INFO] Step 1/6: Detecting on-screen text with OCR...")
+            ocr_data = self.ocr_processor.detect_text(str(processed_video))
+            original_segments = [
+                {
+                    "start": float(item.get("start_time", item.get("start", 0.0))),
+                    "end": float(item.get("end_time", item.get("end", item.get("start", 0.0)))),
+                    "text": str(item.get("text", "")).strip(),
+                }
+                for item in ocr_data.get("segments", [])
+                if str(item.get("text", "")).strip()
+            ]
+
+            if not original_segments:
+                logger.info("[INFO] No OCR segments were detected; falling back to audio transcription...")
+                transcript_data = self.transcriber.transcribe(str(processed_video))
+                original_segments = [
+                    {
+                        "start": float(segment.get("start", 0.0)),
+                        "end": float(segment.get("end", segment.get("start", 0.0))),
+                        "text": str(segment.get("text", "")).strip(),
+                    }
+                    for segment in transcript_data.get("segments", [])
+                    if str(segment.get("text", "")).strip()
+                ]
+                ocr_data = transcript_data
+
+            logger.info("[INFO] Step 2/6: Running video cleanup with inpainting mode '%s'...", inpaint_mode)
             output_clean = self.temp_dir / "cleaned_video.mp4"
             mask_video = None
             if auto_detect_subtitles or auto_remove_watermark:
@@ -217,18 +244,6 @@ class ReupPipeline:
                     mask_video_path=mask_video,
                 )
             )
-
-            logger.info("[INFO] Step 2/6: Detecting on-screen text with OCR...")
-            ocr_data = self.ocr_processor.detect_text(str(processed_video))
-            original_segments: list[dict] = [
-                {
-                    "start": float(item.get("start_time", item.get("start", 0.0))),
-                    "end": float(item.get("end_time", item.get("end", item.get("start", 0.0)))),
-                    "text": str(item.get("text", "")).strip(),
-                }
-                for item in ocr_data.get("segments", [])
-                if str(item.get("text", "")).strip()
-            ]
 
             if not original_segments:
                 logger.info("[INFO] No OCR segments were detected; falling back to audio transcription...")
