@@ -174,12 +174,20 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
         if speed_value != 1.0 and not background_audio_path:
             command.extend(["-af", f"atempo={speed_value}"])
 
-        codec = "h264_nvenc" if self.use_nvenc else "libx264"
+        codec = "h264_nvenc"
         command.extend([
             "-c:v",
             codec,
+            "-preset",
+            "p7",
+            "-cq",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
             "-c:a",
             "aac",
+            "-b:a",
+            "320k",
             "-movflags",
             "+faststart",
             str(output_file),
