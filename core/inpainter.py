@@ -465,8 +465,12 @@ class VideoInpainter:
                 shutil.rmtree(output_path, ignore_errors=True)
                 return output_path
 
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            return promote_file_to_destination(candidate, output_path, search_root=output_path, move=True)
+            if candidate and candidate.exists():
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                return promote_file_to_destination(candidate, output_path, search_root=output_path, move=True)
+
+            shutil.rmtree(output_path, ignore_errors=True)
+            return output_path
 
         return output_path
 
@@ -574,8 +578,8 @@ class VideoInpainter:
                 enable_vram_cleanup=enable_vram_cleanup,
             )
         except Exception as exc:
-            logger.warning("[WARNING] ProPainter execution failed. Fallback to original video.")
-            print("[WARNING] ProPainter execution failed. Fallback to original video.")
+            logger.warning("[WARNING] ProPainter execution failed or output missing (%s). Fallback using original input video.", exc)
+            print(f"[WARNING] ProPainter execution failed or output missing ({exc}). Fallback using original input video.")
             if Path(input_video_path).exists():
                 self.cleaned_video_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(str(input_video_path), str(self.cleaned_video_path))
