@@ -53,7 +53,7 @@ class SubtitleRenderer:
             f"BackColour={self._hex_to_ass_color(style['shadow'])},"
             f"BorderStyle=1,Outline=2,Shadow=2"
         )
-        escaped_path = srt_path.replace("'", "\\'")
+        escaped_path = str(srt_path).replace("\\", "/").replace(":", "\\:").replace("'", "'\\''")
         return f"subtitles='{escaped_path}':force_style='{subtitle_style}'"
 
     def render_subtitles(self, input_video_path: str, output_video_path: str, srt_path: str, mode: str, style: dict[str, str]) -> str:
@@ -72,5 +72,12 @@ class SubtitleRenderer:
             str(output_path),
         ]
         logger.info("Rendering subtitles with ffmpeg: %s", " ".join(shlex.quote(part) for part in command))
-        subprocess.run(command, check=True)
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            stderr_output = exc.stderr or ""
+            logger.error("FFmpeg subtitle rendering failed with stderr:\n%s", stderr_output)
+            raise RuntimeError(f"FFmpeg subtitle rendering failed: {stderr_output}") from exc
+        if completed.stderr:
+            logger.info("FFmpeg subtitle rendering stderr: %s", completed.stderr)
         return str(output_path)
