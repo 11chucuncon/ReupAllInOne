@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Sequence, Union
@@ -50,7 +51,7 @@ class ReupPipeline:
         self.app_config = self.settings.get("app", {})
 
         self.downloader = VideoDownloader(config_path=self.config_path)
-        self.transcriber = WhisperTranscriber(config_path=self.config_path)
+        self.transcriber = WhisperTranscriber(config_path=self.config_path, device="cpu")
         self.rewriter = LLMRewriter(config_path=self.config_path)
         self.translator = TranslationEngine(config_path=self.config_path)
         self.tts_engine = TTSEngine(config_path=self.config_path)
@@ -123,6 +124,179 @@ class ReupPipeline:
             return str(local_path.resolve())
 
         raise ValueError("Input source must be a valid file path or URL")
+
+    def _run_gpu_inpainting_task(self, original_video: Path) -> Path:
+        """Perform YOLO detection and ProPainter cleaning on the GPU thread."""
+        self.cleaned_video_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            detected_boxes = self.inpainter.detect_watermark_and_text(str(original_video))
+            if detected_boxes:
+                logger.info(
+                    "[INFO] Detected %s object frames requiring inpainting. Building masks and invoking ProPainter...",
+                    len(detected_boxes),
+                )
+                cleaned_video_path = self.inpainter.clean_video(
+                    str(original_video),
+                    str(self.cleaned_video_path),
+                    detected_boxes=detected_boxes,
+                    subvideo_length=self.app_config.get("propainter_subvideo_length", 30),
+                    raft_iter=self.app_config.get("propainter_raft_iter", 10),
+                    resize_max_side=self.app_config.get("propainter_resize_max_side", 1280),
+                    fp16=self.app_config.get("propainter_fp16", True),
+                    enable_vram_cleanup=self.app_config.get("propainter_enable_vram_cleanup", True),
+                )
+                cleaned_path = Path(cleaned_video_path)
+                if cleaned_path.exists() and cleaned_path.is_file():
+                    return cleaned_path
+                return Path(resolve_workspace_media_file(cleaned_video_path, expected_suffix=".mp4"))
+
+            logger.info("[INFO] No watermark or text objects found. Copying original video to cleaned_video.mp4")
+            shutil.copy2(str(original_video), str(self.cleaned_video_path))
+            return self.cleaned_video_path
+        finally:
+            try:
+                import torch
+
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+    def _run_cpu_audio_subtitle_task(
+        self,
+        original_video: Path,
+        target_language: str,
+        api_target_language: str,
+        auto_rewrite: bool,
+        openrouter_api_key: Optional[str],
+        tts_engine_mode: Optional[str],
+        tts_mode: Optional[str],
+        reference_audio_path: Optional[str],
+        custom_voice: Optional[str],
+        voice_preset: Optional[str],
+        subtitle_mode: str,
+        subtitle_font: Optional[str],
+        subtitle_size: int,
+        subtitle_color: str,
+        subtitle_outline_color: str,
+        subtitle_position: str,
+    ) -> dict:
+        """Extract audio/transcribe/translate/create TTS and subtitle files on the CPU thread."""
+        transcript_data = self.transcriber.transcribe(str(original_video))
+        original_segments = [
+            {
+                "start": float(segment.get("start", 0.0)),
+                "end": float(segment.get("end", segment.get("start", 0.0))),
+                "text": str(segment.get("text", "")).strip(),
+            }
+            for segment in transcript_data.get("segments", [])
+            if str(segment.get("text", "")).strip()
+        ]
+
+        if not original_segments:
+            raise RuntimeError("No subtitle or transcription text was extracted from the audio.")
+
+        subtitle_mode = subtitle_mode.title()
+        subtitle_language = self.sanitize_lang_code(target_language)
+        translated_segments: list[dict] = []
+        if subtitle_mode in {"Translated", "Dual"} or (tts_mode == "Translated narration"):
+            logger.info("[INFO] Step 3/6: Translating OCR text to %s...", subtitle_language)
+            translated_segments = self._translate_segments(original_segments, subtitle_language, openrouter_api_key)
+
+        if subtitle_mode == "Translated" and translated_segments:
+            subtitle_segments = translated_segments
+        elif subtitle_mode == "Dual" and translated_segments:
+            subtitle_segments = [
+                {
+                    "start": orig["start"],
+                    "end": orig["end"],
+                    "text": f"{orig['text']} | {trans['text']}",
+                }
+                for orig, trans in zip(original_segments, translated_segments)
+            ]
+        else:
+            subtitle_segments = original_segments
+
+        subtitle_style = {
+            "font": subtitle_font or "Arial",
+            "size": str(subtitle_size),
+            "color": subtitle_color or "#FFFFFF",
+            "border": subtitle_outline_color or "#000000",
+            "shadow": subtitle_outline_color or "#000000",
+        }
+
+        self._write_srt_file(subtitle_segments, self.subtitle_srt_path)
+        subtitle_source_path = self.subtitle_srt_path
+        try:
+            subtitle_source_path = find_file_anywhere(self.temp_dir, ".srt")
+        except FileNotFoundError:
+            subtitle_source_path = self.subtitle_srt_path
+        if subtitle_source_path != self.subtitle_srt_path:
+            subtitle_source_path = promote_file_to_destination(subtitle_source_path, self.subtitle_srt_path, search_root=self.temp_dir, move=True)
+
+        self.subtitle_renderer.write_ass_file(str(self.subtitle_srt_path), str(self.subtitle_ass_path), subtitle_style)
+
+        narration_text: Optional[str] = None
+        if auto_rewrite:
+            try:
+                self.rewriter.set_api_key(openrouter_api_key)
+                narration_text = self.rewriter.rewrite(transcript_data.get("full_text", ""), api_target_language)
+            except Exception as exc:
+                logger.warning("AI rewrite step failed: %s", exc)
+
+        narration_text = narration_text or (
+            " ".join(item["text"] for item in translated_segments)
+            if tts_mode == "Translated narration" and translated_segments
+            else transcript_data.get("full_text", "")
+        )
+        narration_text = narration_text.strip() or transcript_data.get("full_text", "")
+
+        total_source_duration = sum(
+            max(0.1, float(item.get("end", item.get("start", 0.0))) - float(item.get("start", 0.0)))
+            for item in original_segments
+        )
+
+        logger.info("[INFO] Step 4/6: Generating narration audio...")
+        if str(tts_engine_mode or "").lower().startswith("local"):
+            asyncio.run(
+                self.tts_engine.clone_speech(
+                    narration_text,
+                    str(self.audio_output_path),
+                    reference_audio_path=reference_audio_path,
+                    target_language=api_target_language,
+                    voice=custom_voice,
+                    voice_preset=voice_preset,
+                    target_duration=total_source_duration,
+                )
+            )
+        else:
+            asyncio.run(
+                self.tts_engine.generate_speech(
+                    narration_text,
+                    str(self.audio_output_path),
+                    voice=custom_voice,
+                    engine_mode="edge",
+                    target_language=api_target_language,
+                    target_duration=total_source_duration,
+                )
+            )
+
+        discovered_audio_path: Path | None = None
+        for extension in (".mp3", ".wav"):
+            try:
+                discovered_audio_path = find_file_anywhere(self.temp_dir, extension)
+                break
+            except FileNotFoundError:
+                continue
+        if discovered_audio_path is not None and discovered_audio_path != self.audio_output_path:
+            discovered_audio_path = promote_file_to_destination(discovered_audio_path, self.audio_output_path, search_root=self.temp_dir, move=True)
+
+        return {
+            "audio_path": str(discovered_audio_path or self.audio_output_path),
+            "subtitle_srt_path": str(self.subtitle_srt_path),
+            "subtitle_ass_path": str(self.subtitle_ass_path),
+            "subtitle_mode": subtitle_mode,
+            "subtitle_style": subtitle_style,
+        }
 
     def _format_srt_timestamp(self, seconds: float) -> str:
         """Convert seconds to SRT timestamp format."""
@@ -279,155 +453,47 @@ class ReupPipeline:
             processed_video = Path(video_path)
             original_segments: list[dict] = []
 
-            logger.info("[INFO] Step 1/5: Running YOLO scan for text and watermark detection...")
-            detected_boxes = self.inpainter.detect_watermark_and_text(str(processed_video))
-            self.cleaned_video_path.parent.mkdir(parents=True, exist_ok=True)
-            if detected_boxes:
-                logger.info(
-                    "[INFO] Detected %s object frames requiring inpainting. Building masks and invoking ProPainter...",
-                    len(detected_boxes),
+            logger.info("[INFO] Step 1/5: Starting parallel GPU and CPU tasks...")
+            future_gpu = None
+            future_cpu = None
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_gpu = executor.submit(
+                    self._run_gpu_inpainting_task,
+                    processed_video,
                 )
-                cleaned_video_path = self.inpainter.clean_video(
-                    str(processed_video),
-                    str(self.cleaned_video_path),
-                    detected_boxes=detected_boxes,
-                    subvideo_length=propainter_subvideo_length,
-                    raft_iter=propainter_raft_iter,
-                    resize_max_side=propainter_resize_max_side,
-                    fp16=propainter_fp16,
-                    enable_vram_cleanup=propainter_enable_vram_cleanup,
-                )
-                cleaned_path = Path(cleaned_video_path)
-                if cleaned_path.exists() and cleaned_path.is_file():
-                    processed_video = cleaned_path
-                else:
-                    processed_video = Path(resolve_workspace_media_file(cleaned_video_path, expected_suffix=".mp4"))
-            else:
-                logger.info("[INFO] No watermark or text objects found. Copying original video to cleaned_video.mp4")
-                shutil.copy2(str(processed_video), str(self.cleaned_video_path))
-                processed_video = Path(self.cleaned_video_path)
-
-            logger.info("[INFO] Step 2/5: Extracting subtitles from audio or fallback OCR/YOLO...")
-            transcript_data = self.transcriber.transcribe(str(processed_video))
-            original_segments = [
-                {
-                    "start": float(segment.get("start", 0.0)),
-                    "end": float(segment.get("end", segment.get("start", 0.0))),
-                    "text": str(segment.get("text", "")).strip(),
-                }
-                for segment in transcript_data.get("segments", [])
-                if str(segment.get("text", "")).strip()
-            ]
-            ocr_data = transcript_data
-
-            if not original_segments:
-                raise RuntimeError("No subtitle or transcription text was extracted from the audio.")
-
-            subtitle_mode = subtitle_mode.title()
-            subtitle_language = self.sanitize_lang_code(target_language)
-            translated_segments = []
-            if subtitle_mode in {"Translated", "Dual"} or (tts_mode == "Translated narration"):
-                logger.info("[INFO] Step 3/6: Translating OCR text to %s...", subtitle_language)
-                translated_segments = self._translate_segments(original_segments, subtitle_language, openrouter_api_key)
-
-            if subtitle_mode == "Translated" and translated_segments:
-                subtitle_segments = translated_segments
-            elif subtitle_mode == "Dual" and translated_segments:
-                subtitle_segments = [
-                    {
-                        "start": orig["start"],
-                        "end": orig["end"],
-                        "text": f"{orig['text']} | {trans['text']}",
-                    }
-                    for orig, trans in zip(original_segments, translated_segments)
-                ]
-            else:
-                subtitle_segments = original_segments
-
-            subtitle_style = {
-                "font": subtitle_font or "Arial",
-                "size": str(subtitle_size),
-                "color": subtitle_color or "#FFFFFF",
-                "border": subtitle_outline_color or "#000000",
-                "shadow": subtitle_outline_color or "#000000",
-            }
-            self._write_srt_file(subtitle_segments, self.subtitle_srt_path)
-            subtitle_source_path = self.subtitle_srt_path
-            try:
-                subtitle_source_path = find_file_anywhere(self.temp_dir, ".srt")
-            except FileNotFoundError:
-                subtitle_source_path = self.subtitle_srt_path
-            if subtitle_source_path != self.subtitle_srt_path:
-                subtitle_source_path = promote_file_to_destination(subtitle_source_path, self.subtitle_srt_path, search_root=self.temp_dir, move=True)
-            self.subtitle_renderer.write_ass_file(str(subtitle_source_path), str(self.subtitle_ass_path), subtitle_style)
-
-            rewritten_text: Optional[str] = None
-            if auto_rewrite:
-                try:
-                    self.rewriter.set_api_key(openrouter_api_key)
-                    rewritten_text = self.rewriter.rewrite(ocr_data.get("full_text", ""), api_target_language)
-                except Exception as exc:
-                    logger.warning("AI rewrite step failed: %s", exc)
-
-            narration_text = rewritten_text or (
-                " ".join(item["text"] for item in translated_segments)
-                if tts_mode == "Translated narration" and translated_segments
-                else ocr_data.get("full_text", "")
-            )
-            narration_text = narration_text.strip() or ocr_data.get("full_text", "")
-
-            total_source_duration = sum(max(0.1, float(item.get("end", item.get("start", 0.0))) - float(item.get("start", 0.0))) for item in original_segments)
-            logger.info("[INFO] Step 4/6: Generating narration audio...")
-            if str(tts_engine_mode or "").lower().startswith("local"):
-                asyncio.run(
-                    self.tts_engine.clone_speech(
-                        narration_text,
-                        str(self.audio_output_path),
-                        reference_audio_path=reference_audio_path,
-                        target_language=api_target_language,
-                        voice=custom_voice,
-                        voice_preset=voice_preset,
-                        target_duration=total_source_duration,
-                    )
-                )
-            else:
-                asyncio.run(
-                    self.tts_engine.generate_speech(
-                        narration_text,
-                        str(self.audio_output_path),
-                        voice=custom_voice,
-                        engine_mode="edge",
-                        target_language=api_target_language,
-                        target_duration=total_source_duration,
-                    )
+                future_cpu = executor.submit(
+                    self._run_cpu_audio_subtitle_task,
+                    processed_video,
+                    target_language,
+                    api_target_language,
+                    auto_rewrite,
+                    openrouter_api_key,
+                    tts_engine_mode,
+                    tts_mode,
+                    reference_audio_path,
+                    custom_voice,
+                    voice_preset,
+                    subtitle_mode,
+                    subtitle_font,
+                    subtitle_size,
+                    subtitle_color,
+                    subtitle_outline_color,
+                    subtitle_position,
                 )
 
-            discovered_audio_path: Path | None = None
-            for extension in (".mp3", ".wav"):
-                try:
-                    discovered_audio_path = find_file_anywhere(self.temp_dir, extension)
-                    break
-                except FileNotFoundError:
-                    continue
-            if discovered_audio_path is not None and discovered_audio_path != self.audio_output_path:
-                discovered_audio_path = promote_file_to_destination(discovered_audio_path, self.audio_output_path, search_root=self.temp_dir, move=True)
+                cleaned_video_path = future_gpu.result()
+                cpu_results = future_cpu.result()
 
-            logger.info("[INFO] Step 5/6: Burning subtitles into video...")
-            subtitle_output_video = self.temp_dir / "subtitled_video.mp4"
-            rendered_subtitle_video = self.subtitle_renderer.render_subtitles(
-                str(processed_video),
-                str(subtitle_output_video),
-                str(self.subtitle_srt_path),
-                subtitle_mode.lower(),
-                subtitle_style,
-            )
+            processed_video = cleaned_video_path
+            audio_path = cpu_results["audio_path"]
+            subtitle_ass_path = cpu_results["subtitle_ass_path"]
 
-            logger.info("[INFO] Step 6/6: Final rendering with audio, speed, and ratio adjustments...")
+            logger.info("[INFO] Step 6/6: Final rendering with audio, subtitles, and ratio adjustments...")
             final_rendered = self.ffmpeg_processor.render_reup_video(
-                video_path=rendered_subtitle_video,
-                new_audio_path=str(discovered_audio_path or self.audio_output_path),
+                video_path=str(processed_video),
+                new_audio_path=str(audio_path),
                 output_path=str(self.final_video_path),
-                srt_path=None,
+                ass_path=str(subtitle_ass_path) if subtitle_ass_path else None,
                 subtitle_text=None,
                 subtitle_font=subtitle_font or "Arial",
                 subtitle_size=int(subtitle_size or 32),

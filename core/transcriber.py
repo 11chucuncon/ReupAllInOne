@@ -13,13 +13,13 @@ logger = logging.getLogger(__name__)
 class WhisperTranscriber:
     """Transcribe audio/video media into text using faster-whisper."""
 
-    def __init__(self, config_path: Optional[str] = None) -> None:
+    def __init__(self, config_path: Optional[str] = None, device: Optional[str] = None) -> None:
         self.config_path = config_path or str(Path(__file__).resolve().parents[1] / "config" / "settings.yaml")
         self.settings = self._load_settings()
         self.whisper_config = self.settings.get("whisper", {})
 
         model_size = self.whisper_config.get("model_size", "small")
-        device = self.whisper_config.get("device", "cuda")
+        device = device or self.whisper_config.get("device", "cuda")
         compute_type = self.whisper_config.get("compute_type", "float16")
 
         try:

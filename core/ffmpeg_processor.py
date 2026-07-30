@@ -95,6 +95,7 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
         new_audio_path: str,
         output_path: str,
         srt_path: Optional[str] = None,
+        ass_path: Optional[str] = None,
         subtitle_text: Optional[str] = None,
         subtitle_font: str = "Arial",
         subtitle_size: int = 32,
@@ -136,7 +137,12 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
             vf_parts.append("scale=1920:-2:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2")
 
         subtitle_file = None
-        if srt_path:
+        if ass_path:
+            ass_file = Path(ass_path).expanduser().resolve()
+            if not ass_file.exists():
+                raise FileNotFoundError(f"Subtitle ASS file not found: {ass_path}")
+            subtitle_file = ass_file
+        elif srt_path:
             srt_file = Path(srt_path).expanduser().resolve()
             if not srt_file.exists():
                 raise FileNotFoundError(f"Subtitle file not found: {srt_path}")
