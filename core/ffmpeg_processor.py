@@ -33,14 +33,68 @@ class FFmpegProcessor:
             logger.error("Failed to parse settings YAML: %s", exc)
             raise RuntimeError("Invalid YAML configuration") from exc
 
+    def _hex_to_ass_color(self, color: str) -> str:
+        """Convert a hex string to an ASS-compatible color."""
+        if not color:
+            return "&H00FFFFFF&"
+        hex_value = color.lstrip("#")
+        if len(hex_value) == 3:
+            hex_value = "".join(ch * 2 for ch in hex_value)
+        if len(hex_value) != 6:
+            return "&H00FFFFFF&"
+        red = hex_value[0:2]
+        green = hex_value[2:4]
+        blue = hex_value[4:6]
+        return f"&H00{blue}{green}{red}&"
+
+    def _create_ass_subtitles(
+        self,
+        output_path: Path,
+        subtitle_text: str,
+        subtitle_font: str,
+        subtitle_size: int,
+        subtitle_color: str,
+        subtitle_outline_color: str,
+        subtitle_position: str,
+    ) -> Path:
+        """Create a simple ASS subtitle file for FFmpeg styling."""
+        subtitle_file = output_path.with_suffix(".ass")
+        alignment = "2" if subtitle_position.lower() == "bottom" else "5"
+        margin_v = "40" if subtitle_position.lower() == "bottom" else "0"
+        content = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Alignment, BorderStyle, Outline, Shadow, MarginL, MarginR, MarginV
+Style: Default,{subtitle_font},{subtitle_size},{self._hex_to_ass_color(subtitle_color)},{self._hex_to_ass_color(subtitle_color)},{self._hex_to_ass_color(subtitle_outline_color)},{self._hex_to_ass_color(subtitle_outline_color)},1,0,{alignment},1,2,0,10,10,{margin_v}
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}{subtitle_text}
+"""
+        subtitle_file.write_text(content, encoding="utf-8")
+        return subtitle_file
+
     def render_reup_video(
         self,
         video_path: str,
         new_audio_path: str,
         output_path: str,
         srt_path: Optional[str] = None,
+        subtitle_text: Optional[str] = None,
+        subtitle_font: str = "Arial",
+        subtitle_size: int = 32,
+        subtitle_color: str = "#FFFFFF",
+        subtitle_outline_color: str = "#000000",
+        subtitle_position: str = "bottom",
+        output_mode: str = "Keep original",
+        speed_factor: Optional[float] = None,
+        hflip: bool = True,
+        background_audio_path: Optional[str] = None,
     ) -> str:
-        """Render a reup video with optional flipping, speed changes, audio replacement, and subtitles."""
+        """Render a reup video with optional flipping, speed changes, audio replacement, subtitles, and ratio adjustments."""
         input_video = Path(video_path)
         input_audio = Path(new_audio_path)
         output_file = Path(output_path)
@@ -55,21 +109,51 @@ class FFmpegProcessor:
         command = ["ffmpeg", "-y", "-i", str(input_video), "-i", str(input_audio)]
         vf_parts = []
 
-        if self.hflip:
+        if hflip:
             vf_parts.append("hflip")
+        if output_mode == "Vertical 9:16 (Shorts/TikTok)":
+            vf_parts.append("scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2")
+        elif output_mode == "Horizontal 16:9 (YouTube)":
+            vf_parts.append("scale=1920:-2:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2")
+
+        subtitle_file = None
         if srt_path:
             srt_file = Path(srt_path)
             if not srt_file.exists():
                 raise FileNotFoundError(f"Subtitle file not found: {srt_path}")
-            vf_parts.append(f"subtitles={srt_file.resolve().as_posix()}")
-        if self.speed_factor != 1.0:
-            vf_parts.append(f"setpts=PTS/{self.speed_factor}")
+            subtitle_file = srt_file
+        elif subtitle_text and subtitle_text.strip():
+            subtitle_file = self._create_ass_subtitles(
+                output_path=output_file,
+                subtitle_text=subtitle_text.strip(),
+                subtitle_font=subtitle_font,
+                subtitle_size=subtitle_size,
+                subtitle_color=subtitle_color,
+                subtitle_outline_color=subtitle_outline_color,
+                subtitle_position=subtitle_position,
+            )
+
+        if subtitle_file:
+            vf_parts.append(f"subtitles={subtitle_file.resolve().as_posix()}")
+
+        speed_value = self.speed_factor if speed_factor is None else speed_factor
+        if speed_value != 1.0:
+            vf_parts.append(f"setpts=PTS/{speed_value}")
 
         if vf_parts:
             command.extend(["-vf", ",".join(vf_parts)])
 
-        if self.speed_factor != 1.0:
-            command.extend(["-af", f"atempo={self.speed_factor}"])
+        if background_audio_path:
+            background_audio = Path(background_audio_path)
+            if not background_audio.exists():
+                raise FileNotFoundError(f"Background audio file not found: {background_audio_path}")
+            command.extend(["-i", str(background_audio)])
+            if speed_value != 1.0:
+                command.extend(["-filter_complex", "[1:a][2:a]amix=inputs=2:duration=longest[a]", "-map", "0:v", "-map", "[a]"])
+            else:
+                command.extend(["-filter_complex", "[1:a][2:a]amix=inputs=2:duration=longest[a]", "-map", "0:v", "-map", "[a]"])
+        elif speed_value != 1.0:
+            command.extend(["-af", f"atempo={speed_value}"])
 
         codec = "h264_nvenc" if self.use_nvenc else "libx264"
         command.extend([

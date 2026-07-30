@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 import yaml
 
@@ -48,20 +48,29 @@ class ReupPipeline:
             logger.error("Failed to parse settings YAML: %s", exc)
             raise RuntimeError("Invalid YAML configuration") from exc
 
-    def _resolve_input_file(self, input_source: str) -> str:
+    def _resolve_input_file(self, input_source: Union[str, Sequence[str], None]) -> str:
         """Resolve the input source to a local media file path."""
+        if isinstance(input_source, (list, tuple)):
+            for candidate in input_source:
+                if isinstance(candidate, str) and candidate.strip():
+                    input_source = candidate
+                    break
+            else:
+                raise ValueError("No input source was provided")
+
         if not input_source or not isinstance(input_source, str):
             raise ValueError("Input source must be a non-empty string")
 
-        if input_source.startswith(("http://", "https://")):
+        source_value = input_source.strip()
+        if source_value.startswith(("http://", "https://")):
             logger.info("[INFO] Step 1/5: Downloading video from URL...")
-            downloaded_path = self.downloader.download(input_source, output_dir=str(self.temp_dir))
+            downloaded_path = self.downloader.download(source_value, output_dir=str(self.temp_dir))
             logger.info("[INFO] Download completed: %s", downloaded_path)
             return downloaded_path
 
-        local_path = Path(input_source)
+        local_path = Path(source_value)
         if not local_path.exists():
-            raise FileNotFoundError(f"Input file not found: {input_source}")
+            raise FileNotFoundError(f"Input file not found: {source_value}")
 
         if local_path.is_file():
             logger.info("[INFO] Step 1/5: Using local file as input")
@@ -79,7 +88,21 @@ class ReupPipeline:
         except Exception as exc:
             logger.warning("Cleanup failed: %s", exc)
 
-    def process_video(self, input_source: str, auto_rewrite: bool = True, custom_voice: Optional[str] = None) -> str:
+    def process_video(
+        self,
+        input_source: Union[str, Sequence[str], None],
+        auto_rewrite: bool = True,
+        custom_voice: Optional[str] = None,
+        subtitle_font: Optional[str] = "Arial",
+        subtitle_size: int = 32,
+        subtitle_color: str = "#FFFFFF",
+        subtitle_outline_color: str = "#000000",
+        subtitle_position: str = "bottom",
+        output_mode: str = "Keep original",
+        speed_factor: float = 1.05,
+        hflip: bool = True,
+        background_audio_path: Optional[str] = None,
+    ) -> str:
         """Run the full video reup pipeline and return the output video path."""
         try:
             logger.info("[INFO] Starting pipeline for input: %s", input_source)
@@ -116,6 +139,16 @@ class ReupPipeline:
                 video_path=video_path,
                 new_audio_path=str(audio_output_path),
                 output_path=str(output_video_path),
+                subtitle_text=rewritten_text,
+                subtitle_font=subtitle_font or "Arial",
+                subtitle_size=int(subtitle_size or 32),
+                subtitle_color=subtitle_color or "#FFFFFF",
+                subtitle_outline_color=subtitle_outline_color or "#000000",
+                subtitle_position=subtitle_position or "bottom",
+                output_mode=output_mode or "Keep original",
+                speed_factor=float(speed_factor or 1.05),
+                hflip=bool(hflip),
+                background_audio_path=background_audio_path,
             )
 
             logger.info("[INFO] Step 6/5: Cleaning temporary files...")
