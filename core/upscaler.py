@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -92,20 +93,21 @@ class VideoUpscaler:
                 " Please download the model weights to the configured path."
             )
 
-        command = [
-            "python",
-            "-m",
-            "realesrgan",
-            "--input",
-            str(input_video),
-            "--output",
-            str(output_video),
-            "--scale",
-            str(scale),
-            "--model_path",
-            str(self.model_path),
+        candidates = [
+            ["realesrgan-ncnn-vulkan", "-i", str(input_video), "-o", str(output_video), "-s", str(scale), "-m", str(self.model_path)],
+            ["python", "-m", "realesrgan", "--input", str(input_video), "--output", str(output_video), "--scale", str(scale), "--model_path", str(self.model_path)],
         ]
-        self._run_command(command)
+
+        last_error: Optional[str] = None
+        for command in candidates:
+            try:
+                self._run_command(command)
+                return
+            except Exception as exc:
+                last_error = str(exc)
+                logger.warning("Upscale attempt failed with command %s: %s", command[0], exc)
+
+        raise RuntimeError(f"Upscale process failed: {last_error or 'unknown error'}")
 
     def upscale(self, input_video_path: str, output_video_path: str, scale: int = 2) -> str:
         """Upscale a video file and preserve original audio."""
@@ -122,14 +124,19 @@ class VideoUpscaler:
         temp_audio = self.temp_dir / "upscale_audio.aac"
         temp_video = self.temp_dir / f"upscale_temp_{scale}x.mp4"
 
-        logger.info("Extracting audio from source video %s", input_video)
-        self._extract_audio(input_video, temp_audio)
+        try:
+            logger.info("Extracting audio from source video %s", input_video)
+            self._extract_audio(input_video, temp_audio)
 
-        logger.info("Upscaling video %s with scale %sx", input_video, scale)
-        self._upscale_video(input_video, temp_video, scale)
+            logger.info("Upscaling video %s with scale %sx", input_video, scale)
+            self._upscale_video(input_video, temp_video, scale)
 
-        logger.info("Reattaching audio to upscaled video %s", temp_video)
-        self._attach_audio(temp_video, temp_audio, output_video)
-        logger.info("Upscaled video saved to %s", output_video)
-
-        return str(output_video)
+            logger.info("Reattaching audio to upscaled video %s", temp_video)
+            self._attach_audio(temp_video, temp_audio, output_video)
+            logger.info("Upscaled video saved to %s", output_video)
+            return str(output_video)
+        except Exception as exc:
+            logger.warning("[WARNING] Real-ESRGAN Upscale failed. Skipping upscale and using input video.")
+            print("[WARNING] Real-ESRGAN Upscale failed. Skipping upscale and using input video.")
+            shutil.copy2(str(input_video), str(output_video))
+            return str(output_video)
