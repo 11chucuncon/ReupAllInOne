@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -188,10 +189,21 @@ class ReupPipeline:
                 })
         return translated_segments
 
+    def _remove_stale_output_path(self, output_path: Union[str, Path]) -> None:
+        """Delete a stale file or directory that would block creating a subtitle output file."""
+        target_path = Path(output_path).expanduser().resolve()
+        if not target_path.exists():
+            return
+        if target_path.is_dir():
+            shutil.rmtree(target_path, ignore_errors=True)
+        else:
+            os.remove(target_path)
+
     def _write_srt_file(self, segments: Sequence[dict], output_path: Path) -> Path:
         """Write transcription segments to a .srt file in the temp directory."""
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
+        self._remove_stale_output_path(output_file)
 
         lines: list[str] = []
         for index, segment in enumerate(segments, start=1):
@@ -265,6 +277,7 @@ class ReupPipeline:
         """Run the full video reup pipeline and return the output video path."""
         try:
             logger.info("[INFO] Starting pipeline for input: %s", input_source)
+            self._remove_stale_output_path(self.subtitle_srt_path)
 
             target_language = self.sanitize_lang_code(target_language)
             api_target_language = self._normalize_language_for_api(target_language)
