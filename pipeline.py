@@ -44,6 +44,7 @@ class ReupPipeline:
         self.output_dir = self._resolve_project_path(self.app_config.get("output_dir", "outputs"), default="outputs")
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._clean_temp_files()
 
     def _resolve_project_path(self, value: Optional[str], default: str) -> Path:
         """Resolve a path relative to the project root into an absolute path."""
@@ -298,8 +299,17 @@ class ReupPipeline:
             else:
                 subtitle_segments = original_segments
 
+            subtitle_style = {
+                "font": subtitle_font or "Arial",
+                "size": str(subtitle_size),
+                "color": subtitle_color or "#FFFFFF",
+                "border": subtitle_outline_color or "#000000",
+                "shadow": subtitle_outline_color or "#000000",
+            }
             subtitle_path = self.temp_dir / "subtitle_overlay.srt"
             self._write_srt_file(subtitle_segments, subtitle_path)
+            ass_path = self.temp_dir / "subtitle_overlay.ass"
+            self.subtitle_renderer.write_ass_file(str(subtitle_path), str(ass_path), subtitle_style)
 
             rewritten_text: Optional[str] = None
             if auto_rewrite:
@@ -316,6 +326,7 @@ class ReupPipeline:
             )
             narration_text = narration_text.strip() or ocr_data.get("full_text", "")
 
+            total_source_duration = sum(max(0.1, float(item.get("end", item.get("start", 0.0))) - float(item.get("start", 0.0))) for item in original_segments)
             audio_output_path = self.temp_dir / "new_voice.mp3"
             logger.info("[INFO] Step 4/6: Generating narration audio...")
             if str(tts_engine_mode or "").lower().startswith("local"):
@@ -327,6 +338,7 @@ class ReupPipeline:
                         target_language=api_target_language,
                         voice=custom_voice,
                         voice_preset=voice_preset,
+                        target_duration=total_source_duration,
                     )
                 )
             else:
@@ -337,18 +349,12 @@ class ReupPipeline:
                         voice=custom_voice,
                         engine_mode="edge",
                         target_language=api_target_language,
+                        target_duration=total_source_duration,
                     )
                 )
 
             logger.info("[INFO] Step 5/6: Burning subtitles into video...")
             styled_video_path = self.temp_dir / "styled_video.mp4"
-            subtitle_style = {
-                "font": subtitle_font or "Arial",
-                "size": str(subtitle_size),
-                "color": subtitle_color or "#FFFFFF",
-                "border": subtitle_outline_color or "#000000",
-                "shadow": subtitle_outline_color or "#000000",
-            }
             rendered_subtitle_video = self.subtitle_renderer.render_subtitles(
                 str(processed_video),
                 str(styled_video_path),

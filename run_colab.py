@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,11 @@ def ensure_directories() -> None:
     """Create required directories if they do not already exist."""
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    for stale_item in TEMP_DIR.iterdir():
+        if stale_item.is_dir():
+            shutil.rmtree(stale_item, ignore_errors=True)
+        else:
+            stale_item.unlink(missing_ok=True)
 
 
 def ensure_propaint_repository(root: Path) -> Path:
@@ -46,10 +52,27 @@ def ensure_propaint_repository(root: Path) -> Path:
     return propainter_dir
 
 
+def validate_launch_prerequisites(root: Path) -> None:
+    propainter_dir = root / "core" / "ProPainter"
+    required_weights = [
+        propainter_dir / "weights" / "ProPainter.pth",
+        propainter_dir / "weights" / "recurrent_flow_completion.pth",
+        propainter_dir / "weights" / "raft-things.pth",
+    ]
+    missing_weights = [str(path) for path in required_weights if not path.exists()]
+    if missing_weights:
+        raise RuntimeError(f"Missing ProPainter weights: {missing_weights}")
+
+    env_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
+    if not env_key:
+        print("[WARN] GEMINI/OPENROUTER API key is not set in the environment; the app may fail during rewrite steps.")
+
+
 def main() -> None:
     """Launch the Gradio app in a Colab-friendly environment."""
     ensure_directories()
     ensure_propaint_repository(ROOT)
+    validate_launch_prerequisites(ROOT)
 
     print("[INFO] Checking GPU availability...")
     if torch.cuda.is_available():

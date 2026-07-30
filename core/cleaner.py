@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Optional
@@ -99,6 +100,19 @@ class VideoCleaner:
     def _run_yolo(self, frame: np.ndarray) -> np.ndarray:
         return self.detector.detect_mask(frame)
 
+    def _estimate_dynamic_dilation(self, frame_mask: np.ndarray, frame: np.ndarray) -> int:
+        contours, _ = cv2.findContours(frame_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return max(1, min(8, int(self.inpaint_radius)))
+
+        largest_contour = max(contours, key=cv2.contourArea)
+        _, _, width, height = cv2.boundingRect(largest_contour)
+        max_side = max(width, height)
+        frame_height, frame_width = frame.shape[:2]
+        reference = max(64, min(frame_width, frame_height) // 6)
+        dilation = int(round(max_side / reference))
+        return max(1, min(8, dilation))
+
     def generate_dynamic_mask_sequence(self, input_video_path: str, output_mask_dir: str) -> str:
         input_path = Path(input_video_path).expanduser().resolve()
         output_dir = Path(output_mask_dir).expanduser().resolve()
@@ -147,13 +161,20 @@ class VideoCleaner:
 
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
             frame_mask = cv2.morphologyEx(frame_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
-            frame_mask = cv2.dilate(frame_mask, kernel, iterations=1)
+            dilation_factor = self._estimate_dynamic_dilation(frame_mask, frame)
+            frame_mask = cv2.dilate(frame_mask, kernel, iterations=dilation_factor)
 
             mask_path = output_dir / f"mask_{frame_index:05d}.png"
             cv2.imwrite(str(mask_path), frame_mask)
             written_masks += 1
 
         capture.release()
+
+        metadata = {
+            "dynamic_mask_dilation": max(1, min(8, int(self.cleaner_config.get("mask_dilation", 4)))),
+            "frame_count": written_masks,
+        }
+        (output_dir / "mask_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
         if written_masks == 0:
             raise RuntimeError(f"No frames were processed for mask generation from {input_video_path}")

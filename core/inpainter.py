@@ -46,6 +46,7 @@ class VideoInpainter:
         subprocess.run(command, check=True, cwd=str(cwd or self.project_root))
 
     def _ensure_propaint_repository(self) -> Path:
+        self.propainter_dir = (self.project_root / "core" / "ProPainter").resolve()
         if self.propainter_dir.exists() and (self.propainter_dir / "inference_propainter.py").exists():
             return self.propainter_dir
 
@@ -92,6 +93,48 @@ class VideoInpainter:
             raise RuntimeError(f"No frames were decoded from {video_path}")
 
         return torch.stack(frames), float(fps), (width, height), str(video_path)
+
+    def _resize_video_for_inpainting(self, input_video_path: str, output_path: str, resize_max_side: int = 1280) -> str:
+        input_path = Path(input_video_path).expanduser().resolve()
+        output_file = Path(output_path).expanduser().resolve()
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        capture = cv2.VideoCapture(str(input_path))
+        if not capture.isOpened():
+            raise RuntimeError(f"Could not open video for resize preprocessing: {input_video_path}")
+
+        try:
+            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            if width <= 0 or height <= 0:
+                return input_video_path
+            if max(width, height) <= resize_max_side:
+                return input_video_path
+
+            if width >= height:
+                new_width = resize_max_side
+                new_height = int(height * resize_max_side / width)
+            else:
+                new_height = resize_max_side
+                new_width = int(width * resize_max_side / height)
+
+            writer = None
+            while True:
+                ret, frame = capture.read()
+                if not ret:
+                    break
+                resized = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
+                if writer is None:
+                    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                    writer = cv2.VideoWriter(str(output_file), fourcc, max(12.0, capture.get(cv2.CAP_PROP_FPS) or 24.0), (new_width, new_height))
+                    if not writer.isOpened():
+                        raise RuntimeError(f"Could not create resized video writer: {output_file}")
+                writer.write(resized)
+            if writer is not None:
+                writer.release()
+            capture.release()
+            return str(output_file)
+        finally:
+            capture.release()
 
     def _get_propaint_resize_args(self, input_video_path: str, resize_max_side: int = 1280) -> list[str]:
         capture = cv2.VideoCapture(input_video_path)
@@ -312,6 +355,7 @@ class VideoInpainter:
             return self._blur_video(input_video_path, str(output_path))
 
         self._ensure_propaint_repository()
+        resized_input_path = self._resize_video_for_inpainting(input_video_path, str(output_path.parent / "resized_input.mp4"), resize_max_side=resize_max_side)
 
         if mask_video_path is None:
             mask_output_dir = output_path.parent / "propainter_masks"

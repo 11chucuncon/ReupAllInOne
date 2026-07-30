@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -91,6 +92,66 @@ class TTSEngine:
         self._xtts_model = CoquiTTS(self.xtts_model_name, progress_bar=False, gpu=device == "cuda")
         return self._xtts_model
 
+    def _get_audio_duration(self, audio_path: Path) -> float:
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return float(result.stdout.strip() or 0.0)
+        except Exception as exc:
+            logger.warning("Could not inspect audio duration for %s: %s", audio_path, exc)
+            return 0.0
+
+    def _align_audio_to_reference(self, output_file: Path, target_duration: float) -> Path:
+        if target_duration <= 0:
+            return output_file
+
+        actual_duration = self._get_audio_duration(output_file)
+        if actual_duration <= 0:
+            return output_file
+
+        ratio = target_duration / actual_duration
+        if ratio >= 0.95 and ratio <= 1.05:
+            return output_file
+
+        if ratio < 1.0:
+            padded_output = output_file.with_suffix(".padded.mp3")
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(output_file),
+                    "-af",
+                    f"apad=whole_dur={target_duration:.3f}",
+                    str(padded_output),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return padded_output
+
+        adjusted_output = output_file.with_suffix(".adjusted.mp3")
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(output_file),
+                "-filter:a",
+                f"atempo={ratio:.3f}",
+                str(adjusted_output),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return adjusted_output
+
     async def _generate_edge_speech(self, text: str, output_file: Path, voice: Optional[str], rate: Optional[str]) -> str:
         """Generate speech audio using Edge-TTS."""
         selected_voice = voice or self.default_voice
@@ -109,6 +170,7 @@ class TTSEngine:
         voice: Optional[str] = None,
         rate: Optional[str] = None,
         voice_preset: Optional[str] = None,
+        target_duration: Optional[float] = None,
     ) -> str:
         """Clone a voice using a local XTTS v2 model with a reference audio sample."""
         if not text or not text.strip():
@@ -122,7 +184,8 @@ class TTSEngine:
         reference_audio = self._resolve_reference_audio(reference_audio_path, voice_preset=voice_preset)
         if reference_audio is None:
             logger.warning("No reference audio found for voice cloning; falling back to Edge-TTS")
-            return await self._generate_edge_speech(text, output_file, voice, rate)
+            generated_path = await self._generate_edge_speech(text, output_file, voice, rate)
+            return str(self._align_audio_to_reference(Path(generated_path), target_duration or 0.0))
 
         try:
             tts_model = self._ensure_xtts_model()
@@ -136,10 +199,11 @@ class TTSEngine:
                 language=language_code,
             )
             logger.info("Generated cloned speech audio at %s", output_file)
-            return str(output_file)
+            return str(self._align_audio_to_reference(output_file, target_duration or 0.0))
         except Exception as exc:
             logger.warning("XTTS voice cloning failed: %s; falling back to Edge-TTS", exc)
-            return await self._generate_edge_speech(text, output_file, voice, rate)
+            generated_path = await self._generate_edge_speech(text, output_file, voice, rate)
+            return str(self._align_audio_to_reference(Path(generated_path), target_duration or 0.0))
 
     async def generate_speech(
         self,
@@ -151,6 +215,7 @@ class TTSEngine:
         reference_audio_path: Optional[str] = None,
         target_language: Optional[str] = None,
         voice_preset: Optional[str] = None,
+        target_duration: Optional[float] = None,
     ) -> str:
         """Generate an MP3 audio file using the requested engine."""
         if not text or not text.strip():
@@ -162,7 +227,7 @@ class TTSEngine:
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         if str(engine_mode or "").lower().startswith("local"):
-            return await self.clone_speech(
+            generated_path = await self.clone_speech(
                 text,
                 str(output_file),
                 reference_audio_path=reference_audio_path,
@@ -171,5 +236,7 @@ class TTSEngine:
                 rate=rate,
                 voice_preset=voice_preset,
             )
+            return str(self._align_audio_to_reference(Path(generated_path), target_duration or 0.0))
 
-        return await self._generate_edge_speech(text, output_file, voice, rate)
+        generated_path = await self._generate_edge_speech(text, output_file, voice, rate)
+        return str(self._align_audio_to_reference(Path(generated_path), target_duration or 0.0))
