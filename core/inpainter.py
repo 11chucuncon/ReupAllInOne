@@ -567,42 +567,61 @@ class VideoInpainter:
             mask_video_path = self._prepare_mask_sequence_directory(mask_video_path, str(output_path.parent / "propainter_masks_dir"))
 
         try:
+            if enable_vram_cleanup:
+                try:
+                    import gc
+                    import torch as torch_module
+
+                    gc.collect()
+                    torch_module.cuda.empty_cache()
+                except Exception as exc:
+                    logger.warning("VRAM cleanup before ProPainter failed: %s", exc)
+
+            # Enforce smaller inference resolution and shorter segments to reduce VRAM spikes.
+            safe_resize_max_side = min(resize_max_side, 848)
+            safe_subvideo_length = min(subvideo_length, 20)
             self._run_propaint_inference(
                 resized_input_path,
                 mask_video_path,
                 str(output_path),
-                subvideo_length=subvideo_length,
+                subvideo_length=safe_subvideo_length,
                 raft_iter=raft_iter,
-                resize_max_side=resize_max_side,
+                resize_max_side=safe_resize_max_side,
                 fp16=fp16,
                 enable_vram_cleanup=enable_vram_cleanup,
             )
         except Exception as exc:
-            logger.warning("[WARNING] ProPainter execution failed or output missing (%s). Fallback using original input video.", exc)
-            print(f"[WARNING] ProPainter execution failed or output missing ({exc}). Fallback using original input video.")
+            logger.warning("[WARNING] ProPainter inpainting failed (%s). Falling back to original input video.", exc)
+            print(f"[WARNING] ProPainter inpainting failed ({exc}). Falling back to original input video.")
             if Path(input_video_path).exists():
-                self.cleaned_video_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(str(input_video_path), str(self.cleaned_video_path))
-                return str(self.cleaned_video_path)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(input_video_path), str(output_path))
+                return str(output_path)
             raise RuntimeError(f"ProPainter failed and source video is missing: {input_video_path}") from exc
 
-        cleaned_search_root = WORK_DIR / "cleaned"
-        try:
-            discovered_video = find_file_anywhere(cleaned_search_root, ".mp4")
-        except FileNotFoundError:
-            discovered_video = self._resolve_output_video_path(output_path)
+        if output_path.exists() and output_path.is_file():
+            return str(output_path)
 
-        if not discovered_video.exists() or discovered_video.is_dir():
-            logger.warning("[WARNING] ProPainter execution failed. Fallback to original video.")
-            print("[WARNING] ProPainter execution failed. Fallback to original video.")
-            self.cleaned_video_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(str(input_video_path), str(self.cleaned_video_path))
-            return str(self.cleaned_video_path)
+        if output_path.exists() and output_path.is_dir():
+            try:
+                candidate = find_file_anywhere(output_path, ".mp4")
+            except FileNotFoundError:
+                shutil.rmtree(output_path, ignore_errors=True)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(input_video_path), str(output_path))
+                return str(output_path)
 
-        if discovered_video.exists() and discovered_video.is_file() and discovered_video != self.cleaned_video_path:
-            discovered_video = promote_file_to_destination(discovered_video, self.cleaned_video_path, search_root=cleaned_search_root, move=True)
+            if candidate and candidate.exists():
+                return str(promote_file_to_destination(candidate, output_path, search_root=output_path, move=True))
 
-        resolved_output_path = discovered_video
-        if not resolved_output_path.exists() or resolved_output_path.is_dir():
-            raise RuntimeError(f"ProPainter did not produce a valid video file at {resolved_output_path}")
-        return str(resolved_output_path)
+            shutil.rmtree(output_path, ignore_errors=True)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(input_video_path), str(output_path))
+            return str(output_path)
+
+        if Path(input_video_path).exists():
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(input_video_path), str(output_path))
+            return str(output_path)
+
+        raise RuntimeError(f"Unable to resolve ProPainter output or fallback from {input_video_path}")

@@ -135,22 +135,33 @@ class ReupPipeline:
                     "[INFO] Detected %s object frames requiring inpainting. Building masks and invoking ProPainter...",
                     len(detected_boxes),
                 )
-                cleaned_video_path = self.inpainter.clean_video(
-                    str(original_video),
-                    str(self.cleaned_video_path),
-                    detected_boxes=detected_boxes,
-                    subvideo_length=self.app_config.get("propainter_subvideo_length", 30),
-                    raft_iter=self.app_config.get("propainter_raft_iter", 10),
-                    resize_max_side=self.app_config.get("propainter_resize_max_side", 1280),
-                    fp16=self.app_config.get("propainter_fp16", True),
-                    enable_vram_cleanup=self.app_config.get("propainter_enable_vram_cleanup", True),
-                )
+                try:
+                    cleaned_video_path = self.inpainter.clean_video(
+                        str(original_video),
+                        str(self.cleaned_video_path),
+                        detected_boxes=detected_boxes,
+                        subvideo_length=min(self.app_config.get("propainter_subvideo_length", 30), 20),
+                        raft_iter=self.app_config.get("propainter_raft_iter", 10),
+                        resize_max_side=min(self.app_config.get("propainter_resize_max_side", 1280), 848),
+                        fp16=self.app_config.get("propainter_fp16", True),
+                        enable_vram_cleanup=self.app_config.get("propainter_enable_vram_cleanup", True),
+                    )
+                except Exception as exc:
+                    logger.warning("[WARNING] GPU inpainting task failed (%s). Falling back to original video.", exc)
+                    cleaned_video_path = str(self.cleaned_video_path)
+                    shutil.copy2(str(original_video), str(cleaned_video_path))
+
                 cleaned_path = Path(cleaned_video_path)
                 if cleaned_path.exists() and cleaned_path.is_file():
                     return cleaned_path
                 return Path(resolve_workspace_media_file(cleaned_video_path, expected_suffix=".mp4"))
 
             logger.info("[INFO] No watermark or text objects found. Copying original video to cleaned_video.mp4")
+            shutil.copy2(str(original_video), str(self.cleaned_video_path))
+            return self.cleaned_video_path
+        except Exception as exc:
+            logger.warning("[WARNING] GPU worker hit an error (%s). Falling back to original video.", exc)
+            self.cleaned_video_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(original_video), str(self.cleaned_video_path))
             return self.cleaned_video_path
         finally:
