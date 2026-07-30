@@ -68,7 +68,7 @@ def _get_voice_choices(target_language: Optional[object]) -> list[str]:
         "ko": ["ko-KR-SunHiNeural (Giọng nữ tiếng Hàn)"],
         "th": ["th-TH-PremwadeeNeural (Giọng nữ tiếng Thái)"],
     }
-    key = _sanitize_lang_code(target_language).split("-")[0]
+    key = sanitize_lang_code(target_language).split("-")[0]
     return language_map.get(key, language_map["vi"])
 
 
@@ -262,7 +262,7 @@ def create_app() -> gr.Blocks:
                 result_path = pipeline.process_video(
                     input_source=input_source,
                     auto_rewrite=auto_rewrite_value,
-                    target_language=_sanitize_lang_code(target_language_value),
+                    target_language=sanitize_lang_code(target_language_value),
                     custom_voice=_map_voice_label(voice_value),
                     openrouter_api_key=gemini_api_key_value,
                     tts_engine_mode=tts_engine_mode_value or "Edge-TTS Free (Tốc độ cao)",
