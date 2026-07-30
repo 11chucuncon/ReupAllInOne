@@ -104,16 +104,31 @@ class ReupPipeline:
         seconds_part, milliseconds = divmod(remainder, 1000)
         return f"{hours:02d}:{minutes:02d}:{seconds_part:02d},{milliseconds:03d}"
 
-    def _normalize_target_language(self, language: Optional[object]) -> str:
-        if isinstance(language, (set, list, tuple)):
-            language = list(language)[0] if len(language) > 0 else "vi"
-        raw = str(language or "vi").strip()
-        if not raw:
-            raw = "vi"
-        return raw.split()[0].split("(")[0].strip().lower()
+    def sanitize_lang_code(self, lang_input: Optional[object]) -> str:
+        while isinstance(lang_input, (set, list, tuple)):
+            if len(lang_input) > 0:
+                lang_input = next(iter(lang_input))
+            else:
+                lang_input = "vi"
+                break
+
+        lang_str = str(lang_input or "vi").strip().lower()
+        if "(" in lang_str:
+            lang_str = lang_str.split("(")[0].strip()
+
+        lang_map = {
+            "zh": "zh-CN",
+            "zh-cn": "zh-CN",
+            "zh-tw": "zh-TW",
+            "vi": "vi-VN",
+            "en": "en-US",
+            "ja": "ja-JP",
+            "ko": "ko-KR",
+        }
+        return lang_map.get(lang_str, lang_str)
 
     def _normalize_language_for_api(self, language: Optional[object]) -> str:
-        base_code = self._normalize_target_language(language)
+        base_code = self.sanitize_lang_code(language)
         return {
             "vi": "vi-VN",
             "vi-vn": "vi-VN",
@@ -121,7 +136,7 @@ class ReupPipeline:
             "en-us": "en-US",
             "zh": "zh-CN",
             "zh-cn": "zh-CN",
-            "zh-tw": "zh-CN",
+            "zh-tw": "zh-TW",
             "ja": "ja-JP",
             "ja-jp": "ja-JP",
             "ko": "ko-KR",
@@ -221,7 +236,7 @@ class ReupPipeline:
         try:
             logger.info("[INFO] Starting pipeline for input: %s", input_source)
 
-            target_language = self._normalize_target_language(target_language)
+            target_language = self.sanitize_lang_code(target_language)
             api_target_language = self._normalize_language_for_api(target_language)
 
             video_path = self._resolve_input_file(input_source)
@@ -292,7 +307,7 @@ class ReupPipeline:
                 raise RuntimeError("No text was extracted by OCR or transcription.")
 
             subtitle_mode = subtitle_mode.title()
-            subtitle_language = self._normalize_target_language(target_language)
+            subtitle_language = self.sanitize_lang_code(target_language)
             translated_segments = []
             if subtitle_mode in {"Translated", "Dual"} or (tts_mode == "Translated narration"):
                 logger.info("[INFO] Step 3/6: Translating OCR text to %s...", subtitle_language)

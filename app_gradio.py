@@ -25,7 +25,31 @@ def _map_voice_label(voice_label: Optional[str]) -> Optional[str]:
     }.get(voice_label, voice_label)
 
 
-def _get_voice_choices(target_language: Optional[str]) -> list[str]:
+def sanitize_lang_code(lang_input: Optional[object]) -> str:
+    while isinstance(lang_input, (set, list, tuple)):
+        if len(lang_input) > 0:
+            lang_input = next(iter(lang_input))
+        else:
+            lang_input = "vi"
+            break
+
+    lang_str = str(lang_input or "vi").strip().lower()
+    if "(" in lang_str:
+        lang_str = lang_str.split("(")[0].strip()
+
+    lang_map = {
+        "zh": "zh-CN",
+        "zh-cn": "zh-CN",
+        "zh-tw": "zh-TW",
+        "vi": "vi-VN",
+        "en": "en-US",
+        "ja": "ja-JP",
+        "ko": "ko-KR",
+    }
+    return lang_map.get(lang_str, lang_str)
+
+
+def _get_voice_choices(target_language: Optional[object]) -> list[str]:
     """Return TTS voice options filtered by target language."""
     language_map = {
         "vi": [
@@ -44,7 +68,7 @@ def _get_voice_choices(target_language: Optional[str]) -> list[str]:
         "ko": ["ko-KR-SunHiNeural (Giọng nữ tiếng Hàn)"],
         "th": ["th-TH-PremwadeeNeural (Giọng nữ tiếng Thái)"],
     }
-    key = (target_language or "vi").split()[0].split("(")[0].strip().lower()
+    key = _sanitize_lang_code(target_language).split("-")[0]
     return language_map.get(key, language_map["vi"])
 
 
@@ -68,13 +92,8 @@ def _resolve_input_source(uploaded_files: Optional[Sequence[str]], online_links:
     raise ValueError("Please provide at least one local video or one valid online link")
 
 
-def _normalize_target_language(language: Optional[Union[str, Sequence[str], set, tuple]]) -> str:
-    if isinstance(language, (set, list, tuple)):
-        language = list(language)[0] if len(language) > 0 else "vi"
-    raw = str(language or "vi").strip()
-    if not raw:
-        raw = "vi"
-    return raw.split()[0].split("(")[0].strip().lower()
+def _normalize_target_language(language: Optional[object]) -> str:
+    return sanitize_lang_code(language)
 
 
 def create_app() -> gr.Blocks:
@@ -243,7 +262,7 @@ def create_app() -> gr.Blocks:
                 result_path = pipeline.process_video(
                     input_source=input_source,
                     auto_rewrite=auto_rewrite_value,
-                    target_language=_normalize_target_language(target_language_value),
+                    target_language=_sanitize_lang_code(target_language_value),
                     custom_voice=_map_voice_label(voice_value),
                     openrouter_api_key=gemini_api_key_value,
                     tts_engine_mode=tts_engine_mode_value or "Edge-TTS Free (Tốc độ cao)",
@@ -280,8 +299,8 @@ def create_app() -> gr.Blocks:
                     "Failed",
                 )
 
-        def update_voice_choices(target_language_value: Optional[str]):
-            choices = _get_voice_choices(_normalize_target_language(target_language_value))
+        def update_voice_choices(target_language_value: Optional[object]):
+            choices = _get_voice_choices(target_language_value)
             return gr.update(choices=choices, value=choices[0] if choices else None)
 
         def update_tts_controls(tts_engine_mode_value: Optional[str]):
