@@ -44,7 +44,8 @@ def _get_voice_choices(target_language: Optional[str]) -> list[str]:
         "ko": ["ko-KR-SunHiNeural (Giọng nữ tiếng Hàn)"],
         "th": ["th-TH-PremwadeeNeural (Giọng nữ tiếng Thái)"],
     }
-    return language_map.get((target_language or "vi").split("(")[0].strip().split()[0].split("-")[0], language_map["vi"])
+    key = (target_language or "vi").split()[0].split("(")[0].strip().lower()
+    return language_map.get(key, language_map["vi"])
 
 
 def _resolve_input_source(uploaded_files: Optional[Sequence[str]], online_links: Optional[str]) -> str:
@@ -109,6 +110,22 @@ def create_app() -> gr.Blocks:
                     type="password",
                     placeholder="Enter your OpenRouter API key here",
                 )
+                tts_engine_mode = gr.Radio(
+                    label="TTS Engine",
+                    choices=["Edge-TTS Free (Tốc độ cao)", "Local ElevenLabs-Style AI (XTTS v2 Clone)"],
+                    value="Edge-TTS Free (Tốc độ cao)",
+                )
+                reference_audio = gr.Audio(
+                    label="Tải lên giọng mẫu (5-10s Audio) để Clone",
+                    type="filepath",
+                    visible=False,
+                )
+                voice_preset = gr.Dropdown(
+                    label="Preset giọng mẫu",
+                    choices=["Nam/Nữ Review phim", "Truyện ngụ ngôn", "News Anchor", "Narrator"],
+                    value="Nam/Nữ Review phim",
+                    visible=False,
+                )
                 voice_dropdown = gr.Dropdown(
                     label="TTS Voice",
                     choices=_get_voice_choices("vi"),
@@ -154,6 +171,9 @@ def create_app() -> gr.Blocks:
             auto_rewrite_value: bool,
             target_language_value: Optional[str],
             openrouter_api_key_value: Optional[str],
+            tts_engine_mode_value: Optional[str],
+            reference_audio_value,
+            voice_preset_value: Optional[str],
             voice_value: Optional[str],
             subtitle_font_value: Optional[str],
             subtitle_size_value: Optional[float],
@@ -176,6 +196,9 @@ def create_app() -> gr.Blocks:
                     target_language=target_language_value,
                     custom_voice=_map_voice_label(voice_value),
                     openrouter_api_key=openrouter_api_key_value,
+                    tts_engine_mode=tts_engine_mode_value or "Edge-TTS Free (Tốc độ cao)",
+                    reference_audio_path=reference_audio_value if isinstance(reference_audio_value, str) else None,
+                    voice_preset=voice_preset_value,
                     subtitle_font=subtitle_font_value or "Arial",
                     subtitle_size=int(subtitle_size_value or 32),
                     subtitle_color=subtitle_color_value or "#FFFFFF",
@@ -201,12 +224,22 @@ def create_app() -> gr.Blocks:
                 )
 
         def update_voice_choices(target_language_value: Optional[str]):
-            return gr.Dropdown(choices=_get_voice_choices(target_language_value), value=_get_voice_choices(target_language_value)[0])
+            choices = _get_voice_choices(target_language_value)
+            return gr.update(choices=choices, value=choices[0] if choices else None)
+
+        def update_tts_controls(tts_engine_mode_value: Optional[str]):
+            is_local = str(tts_engine_mode_value or "").startswith("Local")
+            return gr.update(visible=is_local), gr.update(visible=is_local)
 
         target_language.change(
             update_voice_choices,
             inputs=[target_language],
             outputs=[voice_dropdown],
+        )
+        tts_engine_mode.change(
+            update_tts_controls,
+            inputs=[tts_engine_mode],
+            outputs=[reference_audio, voice_preset],
         )
 
         submit_btn.click(
@@ -217,6 +250,9 @@ def create_app() -> gr.Blocks:
                 auto_rewrite,
                 target_language,
                 gemini_api_key,
+                tts_engine_mode,
+                reference_audio,
+                voice_preset,
                 voice_dropdown,
                 subtitle_font,
                 subtitle_size,

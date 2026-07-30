@@ -143,6 +143,9 @@ class ReupPipeline:
         target_language: Optional[str] = "vi",
         custom_voice: Optional[str] = None,
         openrouter_api_key: Optional[str] = None,
+        tts_engine_mode: Optional[str] = "Edge-TTS Free (Tốc độ cao)",
+        reference_audio_path: Optional[str] = None,
+        voice_preset: Optional[str] = None,
         subtitle_font: Optional[str] = "Arial",
         subtitle_size: int = 32,
         subtitle_color: str = "#FFFFFF",
@@ -179,13 +182,26 @@ class ReupPipeline:
 
             audio_output_path = self.temp_dir / "new_voice.mp3"
             logger.info("[INFO] Step 4/5: Generating new speech audio at %s...", audio_output_path)
-            asyncio.run(
-                self.tts_engine.generate_speech(
-                    rewritten_text,
-                    str(audio_output_path),
-                    voice=custom_voice,
+            if str(tts_engine_mode or "").lower().startswith("local"):
+                asyncio.run(
+                    self.tts_engine.clone_speech(
+                        rewritten_text,
+                        str(audio_output_path),
+                        reference_audio_path=reference_audio_path,
+                        target_language=target_language,
+                        voice=custom_voice,
+                        voice_preset=voice_preset,
+                    )
                 )
-            )
+            else:
+                asyncio.run(
+                    self.tts_engine.generate_speech(
+                        rewritten_text,
+                        str(audio_output_path),
+                        voice=custom_voice,
+                        engine_mode="edge",
+                    )
+                )
 
             output_video_path = self.output_dir / f"reup_{timestamp}.mp4"
             logger.info("[INFO] Step 5/5: Rendering final video...")

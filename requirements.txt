@@ -2,6 +2,9 @@ yt-dlp
 faster-whisper
 google-generativeai
 edge-tts
+TTS
+torch
+torchaudio
 gradio
 pyyaml
 pyngrok
