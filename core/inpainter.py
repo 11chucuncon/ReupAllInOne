@@ -16,6 +16,7 @@ import cv2
 import torch
 import yaml
 
+from config import CLEANED_DIR, CLEANED_VIDEO_PATH, TEMP_DIR
 from core.cleaner import VideoCleaner
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,9 @@ class VideoInpainter:
         self.inpaint_config = self.settings.get("inpaint", {})
         self.propainter_dir = self.project_root / "core" / "ProPainter"
         self.cleaner = VideoCleaner(config_path=self.config_path)
+        self.workspace_temp_dir = TEMP_DIR
+        self.workspace_cleaned_dir = CLEANED_DIR
+        self.cleaned_video_path = CLEANED_VIDEO_PATH
 
     def _load_settings(self) -> dict:
         try:
@@ -308,10 +312,12 @@ class VideoInpainter:
                 if path.is_file() and path.suffix.lower() in {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v"}
             )
             if video_candidates:
-                shutil.rmtree(output_path)
                 candidate = video_candidates[0]
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(candidate), str(output_path))
+                shutil.copy2(str(candidate), str(output_path))
+                for folder in output_path.parent.glob("*"):
+                    if folder.is_dir() and folder != output_path.parent:
+                        shutil.rmtree(folder, ignore_errors=True)
                 return output_path
 
             shutil.rmtree(output_path)
@@ -381,6 +387,8 @@ class VideoInpainter:
         enable_vram_cleanup: bool = True,
     ) -> str:
         output_path = self._prepare_output_path(output_video_path)
+        self.workspace_cleaned_dir.mkdir(parents=True, exist_ok=True)
+        self.workspace_temp_dir.mkdir(parents=True, exist_ok=True)
 
         if mode == "blur":
             return self._blur_video(input_video_path, str(output_path))
@@ -408,4 +416,7 @@ class VideoInpainter:
         resolved_output_path = self._resolve_output_video_path(output_path)
         if not resolved_output_path.exists() or resolved_output_path.is_dir():
             raise RuntimeError(f"ProPainter did not produce a valid video file at {resolved_output_path}")
+        if resolved_output_path != self.cleaned_video_path:
+            shutil.copy2(str(resolved_output_path), str(self.cleaned_video_path))
+            resolved_output_path = self.cleaned_video_path
         return str(resolved_output_path)

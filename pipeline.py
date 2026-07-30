@@ -8,6 +8,19 @@ from typing import Optional, Sequence, Union
 
 import yaml
 
+from config import (
+    AUDIO_OUTPUT_PATH,
+    CLEANED_DIR,
+    CLEANED_VIDEO_PATH,
+    FINAL_VIDEO_PATH,
+    INPUT_DIR,
+    OUTPUT_DIR,
+    SUBTITLE_ASS_PATH,
+    SUBTITLE_SRT_PATH,
+    TEMP_DIR,
+    initialize_workspace,
+)
+
 from core.downloader import VideoDownloader
 from core.ffmpeg_processor import FFmpegProcessor
 from core.inpainter import VideoInpainter
@@ -40,10 +53,20 @@ class ReupPipeline:
         self.inpainter = VideoInpainter(config_path=self.config_path)
         self.video_upscaler = VideoUpscaler(config_path=self.config_path)
 
-        self.temp_dir = self._resolve_project_path(self.app_config.get("temp_dir", "temp"), default="temp")
-        self.output_dir = self._resolve_project_path(self.app_config.get("output_dir", "outputs"), default="outputs")
+        initialize_workspace(clear_existing=True)
+        self.temp_dir = TEMP_DIR
+        self.output_dir = OUTPUT_DIR
+        self.cleaned_dir = CLEANED_DIR
+        self.input_dir = INPUT_DIR
+        self.cleaned_video_path = CLEANED_VIDEO_PATH
+        self.final_video_path = FINAL_VIDEO_PATH
+        self.subtitle_srt_path = SUBTITLE_SRT_PATH
+        self.subtitle_ass_path = SUBTITLE_ASS_PATH
+        self.audio_output_path = AUDIO_OUTPUT_PATH
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.cleaned_dir.mkdir(parents=True, exist_ok=True)
+        self.input_dir.mkdir(parents=True, exist_ok=True)
         self._clean_temp_files()
 
     def _resolve_project_path(self, value: Optional[str], default: str) -> Path:
@@ -260,11 +283,10 @@ class ReupPipeline:
             ocr_data = transcript_data
 
             logger.info("[INFO] Step 2/6: Running video cleanup with inpainting mode '%s'...", inpaint_mode)
-            output_clean = self.temp_dir / "cleaned_video.mp4"
             processed_video = Path(
                 self.inpainter.clean_video(
                     str(processed_video),
-                    str(output_clean),
+                    str(self.cleaned_video_path),
                     mode=inpaint_mode,
                     subvideo_length=propainter_subvideo_length,
                     raft_iter=propainter_raft_iter,
@@ -305,10 +327,8 @@ class ReupPipeline:
                 "border": subtitle_outline_color or "#000000",
                 "shadow": subtitle_outline_color or "#000000",
             }
-            subtitle_path = self.temp_dir / "subtitle_overlay.srt"
-            self._write_srt_file(subtitle_segments, subtitle_path)
-            ass_path = self.temp_dir / "subtitle_overlay.ass"
-            self.subtitle_renderer.write_ass_file(str(subtitle_path), str(ass_path), subtitle_style)
+            self._write_srt_file(subtitle_segments, self.subtitle_srt_path)
+            self.subtitle_renderer.write_ass_file(str(self.subtitle_srt_path), str(self.subtitle_ass_path), subtitle_style)
 
             rewritten_text: Optional[str] = None
             if auto_rewrite:
@@ -326,13 +346,12 @@ class ReupPipeline:
             narration_text = narration_text.strip() or ocr_data.get("full_text", "")
 
             total_source_duration = sum(max(0.1, float(item.get("end", item.get("start", 0.0))) - float(item.get("start", 0.0))) for item in original_segments)
-            audio_output_path = self.temp_dir / "new_voice.mp3"
             logger.info("[INFO] Step 4/6: Generating narration audio...")
             if str(tts_engine_mode or "").lower().startswith("local"):
                 asyncio.run(
                     self.tts_engine.clone_speech(
                         narration_text,
-                        str(audio_output_path),
+                        str(self.audio_output_path),
                         reference_audio_path=reference_audio_path,
                         target_language=api_target_language,
                         voice=custom_voice,
@@ -344,7 +363,7 @@ class ReupPipeline:
                 asyncio.run(
                     self.tts_engine.generate_speech(
                         narration_text,
-                        str(audio_output_path),
+                        str(self.audio_output_path),
                         voice=custom_voice,
                         engine_mode="edge",
                         target_language=api_target_language,
@@ -353,11 +372,10 @@ class ReupPipeline:
                 )
 
             logger.info("[INFO] Step 5/6: Burning subtitles into video...")
-            styled_video_path = self.temp_dir / "styled_video.mp4"
             rendered_subtitle_video = self.subtitle_renderer.render_subtitles(
                 str(processed_video),
-                str(styled_video_path),
-                str(subtitle_path),
+                str(self.final_video_path),
+                str(self.subtitle_srt_path),
                 subtitle_mode.lower(),
                 subtitle_style,
             )
@@ -366,7 +384,7 @@ class ReupPipeline:
             logger.info("[INFO] Step 6/6: Final rendering with audio, speed, and ratio adjustments...")
             final_rendered = self.ffmpeg_processor.render_reup_video(
                 video_path=rendered_subtitle_video,
-                new_audio_path=str(audio_output_path),
+                new_audio_path=str(self.audio_output_path),
                 output_path=str(output_video_path),
                 srt_path=None,
                 subtitle_text=None,

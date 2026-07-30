@@ -11,6 +11,8 @@ from typing import Any
 
 import yaml
 
+from config import FINAL_VIDEO_PATH, TEMP_DIR
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,6 +24,8 @@ class SubtitleRenderer:
         self.config_path = config_path or str(self.project_root / "config" / "settings.yaml")
         self.settings = self._load_settings()
         self.render_config = self.settings.get("subtitle", {})
+        self.workspace_temp_dir = TEMP_DIR
+        self.workspace_output_file = FINAL_VIDEO_PATH
 
     def _load_settings(self) -> dict[str, Any]:
         try:
@@ -166,7 +170,7 @@ class SubtitleRenderer:
             shutil.rmtree(output_path)
         elif output_path.exists():
             os.remove(output_path)
-        ass_path = output_path.with_suffix(".ass")
+        ass_path = self.workspace_temp_dir / "subtitle_overlay.ass"
         self.write_ass_file(srt_path, str(ass_path), style)
         filter_spec = self.build_filter(str(ass_path), mode, style)
         input_path = self._resolve_media_input_path(input_video_path)
