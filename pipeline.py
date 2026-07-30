@@ -33,7 +33,8 @@ class ReupPipeline:
 
         self.downloader = VideoDownloader(config_path=self.config_path)
         self.transcriber = WhisperTranscriber(config_path=self.config_path)
-        self.ocr_processor = OCRProcessor(config_path=self.config_path)
+        ocr_langs = self.settings.get("ocr", {}).get("languages")
+        self.ocr_processor = OCRProcessor(config_path=self.config_path, languages=ocr_langs)
         self.rewriter = LLMRewriter(config_path=self.config_path)
         self.translator = TranslationEngine(config_path=self.config_path)
         self.tts_engine = TTSEngine(config_path=self.config_path)

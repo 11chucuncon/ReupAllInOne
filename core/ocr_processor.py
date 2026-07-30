@@ -14,58 +14,60 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+def _flatten_to_string_list(val, default: str = "en") -> list[str]:
+    """Flatten nested containers (set/list/tuple) or single values into a list[str].
+
+    Maps common Chinese codes to EasyOCR expected codes.
+    """
+    result: list[str] = []
+    stack = [val]
+    while stack:
+        curr = stack.pop()
+        if isinstance(curr, (list, tuple, set)):
+            # extend using list so sets get expanded
+            stack.extend(list(curr))
+        elif curr is None:
+            continue
+        else:
+            s = str(curr).strip()
+            if s:
+                result.append(s)
+
+    if not result:
+        result = [default]
+
+    easyocr_map = {
+        "zh": "zh_sim",
+        "zh-cn": "zh_sim",
+        "zh_cn": "zh_sim",
+        "zh-tw": "zh_tra",
+        "zh_tw": "zh_tra",
+    }
+    normalized: list[str] = []
+    for item in result:
+        key = item.lower()
+        mapped = easyocr_map.get(key, item)
+        if mapped not in normalized:
+            normalized.append(mapped)
+    return normalized
+
+
 class OCRProcessor:
     """Detect text, bounding boxes, and generate OCR segments from video frames."""
 
-    def __init__(self, config_path: str | None = None) -> None:
+    def __init__(self, config_path: str | None = None, languages: Any | None = None) -> None:
         self.project_root = Path(__file__).resolve().parents[1]
         self.config_path = config_path or str(self.project_root / "config" / "settings.yaml")
         self.settings = self._load_settings()
         self.ocr_config = self.settings.get("ocr", {})
-        # Normalize configured languages into a clean list for EasyOCR usage
-        raw_langs = self.ocr_config.get("languages", ["vi", "en", "zh", "ja", "ko"])
-        # Ensure raw_langs is a plain list and not a set/tuple/string or other unexpected type
-        if isinstance(raw_langs, (set, tuple)):
-            raw_langs = list(raw_langs)
-        elif isinstance(raw_langs, str):
-            raw_langs = [raw_langs]
-        elif not isinstance(raw_langs, list):
-            raw_langs = ["en"]
+        # Determine raw languages: prefer explicitly passed `languages`, fall back to config
+        if languages is not None:
+            raw_langs = languages
+        else:
+            raw_langs = self.ocr_config.get("languages", ["vi", "en", "zh", "ja", "ko"])
 
-        # Clean nested/wrapped items so each element is a simple string
-        cleaned_items: list[str] = []
-        for item in raw_langs:
-            # Unwrap nested containers (set/list/tuple) until we reach a primitive
-            while isinstance(item, (set, list, tuple)):
-                if len(item) > 0:
-                    # Convert set/tuple to list so we can index deterministically
-                    item = list(item)[0]
-                else:
-                    item = "en"
-            cleaned_items.append(str(item))
-
-        raw_langs = cleaned_items
-
-        easyocr_map = {
-            "zh": "zh_sim",
-            "zh-cn": "zh_sim",
-            "zh_cn": "zh_sim",
-            "zh-tw": "zh_tra",
-            "zh_tw": "zh_tra",
-            "vi": "vi",
-            "en": "en",
-            "ja": "ja",
-            "ko": "ko",
-        }
-
-        clean_langs: list[str] = []
-        for lang in (raw_langs or []):
-            l_str = str(lang).strip().lower()
-            mapped = easyocr_map.get(l_str, l_str)
-            if mapped not in clean_langs:
-                clean_langs.append(mapped)
-
-        self.languages = clean_langs if clean_langs else ["en"]
+        # Flatten and normalize to a list[str] suitable for easyocr.Reader
+        self.languages = _flatten_to_string_list(raw_langs, default="en")
         self.sample_rate = int(self.ocr_config.get("sample_rate", 1))
 
     def _load_settings(self) -> dict[str, Any]:

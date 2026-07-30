@@ -27,7 +27,8 @@ class ReupPipeline:
         self.project_root = Path(__file__).resolve().parents[1]
         self.config_path = config_path or str(self.project_root / "config" / "settings.yaml")
         self.settings = self._load_settings()
-        self.ocr_processor = OCRProcessor(self.config_path)
+        ocr_langs = self.settings.get("ocr", {}).get("languages")
+        self.ocr_processor = OCRProcessor(config_path=self.config_path, languages=ocr_langs)
         self.inpainter = VideoInpainter(self.config_path)
         self.translator = TranslationEngine(self.config_path)
         self.subtitle_renderer = SubtitleRenderer(self.config_path)
