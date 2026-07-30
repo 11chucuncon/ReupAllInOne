@@ -210,7 +210,7 @@ class VideoInpainter:
                 return vframes, fps, (height, width), str(video_path)
 
             torchvision.io.read_video = custom_read_video
-            if {str(enable_vram_cleanup).lower()}:
+            if {repr(enable_vram_cleanup)}:
                 gc.collect()
                 torch.cuda.empty_cache()
             sys.argv = {json.dumps(args)}
