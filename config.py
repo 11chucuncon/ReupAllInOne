@@ -11,11 +11,12 @@ TEMP_DIR = WORK_DIR / "temp"
 CLEANED_DIR = WORK_DIR / "cleaned"
 OUTPUT_DIR = WORK_DIR / "output"
 
-CLEANED_VIDEO_PATH = CLEANED_DIR / "cleaned_video.mp4"
+CLEANED_VIDEO_PATH = OUTPUT_DIR / "cleaned_video.mp4"
 FINAL_VIDEO_PATH = OUTPUT_DIR / "final_video.mp4"
-SUBTITLE_SRT_PATH = TEMP_DIR / "subtitle_overlay.srt"
-SUBTITLE_ASS_PATH = TEMP_DIR / "subtitle_overlay.ass"
-AUDIO_OUTPUT_PATH = TEMP_DIR / "new_voice.mp3"
+SUBTITLE_SRT_PATH = OUTPUT_DIR / "subtitles.srt"
+SUBTITLE_ASS_PATH = OUTPUT_DIR / "subtitles.ass"
+AUDIO_OUTPUT_PATH = OUTPUT_DIR / "new_voice.mp3"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v"}

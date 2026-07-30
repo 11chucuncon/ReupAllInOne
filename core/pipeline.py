@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from config import OUTPUT_DIR
 from core.inpainter import VideoInpainter
 from core.transcriber import WhisperTranscriber
 from core.subtitle_renderer import SubtitleRenderer
@@ -125,7 +126,7 @@ class ReupPipeline:
             upscaled_path = self.upscaler.upscale_video(final_path, target_resolution=upscale_target)
             final_path = upscaled_path
 
-        output_path = self.project_root / "output" / f"reup_output_{subtitle_mode}_{upscale_target}.mp4"
+        output_path = OUTPUT_DIR / f"reup_output_{subtitle_mode}_{upscale_target}.mp4"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(final_path, output_path)
         self._clean_temp_files()

@@ -400,12 +400,11 @@ class ReupPipeline:
                 subtitle_style,
             )
 
-            output_video_path = self.output_dir / f"reup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
             logger.info("[INFO] Step 6/6: Final rendering with audio, speed, and ratio adjustments...")
             final_rendered = self.ffmpeg_processor.render_reup_video(
                 video_path=rendered_subtitle_video,
                 new_audio_path=str(discovered_audio_path or self.audio_output_path),
-                output_path=str(output_video_path),
+                output_path=str(self.final_video_path),
                 srt_path=None,
                 subtitle_text=None,
                 subtitle_font=subtitle_font or "Arial",
@@ -423,13 +422,16 @@ class ReupPipeline:
             final_output = final_rendered
             if enable_upscale:
                 upscale_value = 2 if str(upscale_factor).startswith("2x") else 4
-                upscale_output = self.output_dir / f"reup_{datetime.now().strftime('%Y%m%d_%H%M%S')}_upscaled_{upscale_value}x.mp4"
+                upscale_output = self.output_dir / f"final_video_upscaled_{upscale_value}x.mp4"
                 logger.info("[INFO] Upscaling final video to %sx...", upscale_value)
                 final_output = self.video_upscaler.upscale(
                     input_video_path=str(final_rendered),
                     output_video_path=str(upscale_output),
                     scale=upscale_value,
                 )
+
+            if Path(final_output).resolve() != self.final_video_path.resolve():
+                final_output = str(promote_file_to_destination(final_output, self.final_video_path, search_root=self.output_dir, move=True))
 
             self._clean_temp_files()
             absolute_output = str(Path(final_output).resolve())

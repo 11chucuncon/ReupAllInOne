@@ -5,6 +5,8 @@ from typing import Optional, Sequence, Union
 
 import gradio as gr
 
+from config import OUTPUT_DIR
+
 
 class ProgressReporter:
     """Small wrapper around Gradio progress updates for long-running video tasks."""
@@ -341,7 +343,7 @@ def create_app() -> gr.Blocks:
                 return (
                     gr.Video(value=input_source),
                     gr.Video(value=result_path),
-                    f"Processed successfully: {result_path}",
+                    f"Processed successfully: {result_path}\nArtifacts stored in: {OUTPUT_DIR}",
                     "Completed",
                 )
             except Exception as exc:
