@@ -196,3 +196,77 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
         except subprocess.CalledProcessError as exc:
             logger.exception("FFmpeg rendering failed with stderr: %s", exc.stderr)
             raise RuntimeError(f"FFmpeg rendering failed: {exc.stderr}") from exc
+
+    def get_media_duration(self, media_path: str) -> float:
+        """Return the duration in seconds for a media file using ffprobe."""
+        input_path = Path(media_path).expanduser().resolve()
+        if not input_path.exists():
+            raise FileNotFoundError(f"Media file not found: {media_path}")
+
+        command = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(input_path),
+        ]
+        try:
+            result = subprocess.run(command, check=True, capture_output=True, text=True)
+            duration = float(result.stdout.strip() or "0.0")
+            logger.info("Detected media duration %s seconds for %s", duration, input_path)
+            return duration
+        except subprocess.CalledProcessError as exc:
+            logger.exception("ffprobe failed: %s", exc.stderr)
+            raise RuntimeError(f"Could not determine media duration: {exc.stderr}") from exc
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid duration received from ffprobe for {media_path}") from exc
+
+    def adjust_audio_speed(self, input_path: str, output_path: str, speed_ratio: float) -> str:
+        """Adjust the speed of an audio file using ffmpeg atempo filters."""
+        input_file = Path(input_path).expanduser().resolve()
+        output_file = Path(output_path).expanduser().resolve()
+        if not input_file.exists():
+            raise FileNotFoundError(f"Input audio not found: {input_path}")
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        if speed_ratio <= 0:
+            raise ValueError("Speed ratio must be positive")
+
+        atempo_values = []
+        remaining_ratio = speed_ratio
+        while remaining_ratio < 0.5 or remaining_ratio > 2.0:
+            if remaining_ratio < 0.5:
+                atempo_values.append(0.5)
+                remaining_ratio /= 0.5
+            else:
+                atempo_values.append(2.0)
+                remaining_ratio /= 2.0
+        atempo_values.append(round(remaining_ratio, 3))
+        atempo_filter = ",".join(f"atempo={value}" for value in atempo_values if value > 0)
+
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_file),
+            "-filter:a",
+            atempo_filter,
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            str(output_file),
+        ]
+
+        ffmpeg_command = " ".join(shlex.quote(part) for part in command)
+        logger.info("Running FFmpeg audio speed adjustment: %s", ffmpeg_command)
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            logger.info("Created adjusted audio %s", output_file)
+            return str(output_file)
+        except subprocess.CalledProcessError as exc:
+            logger.exception("Audio speed adjustment failed: %s", exc.stderr)
+            raise RuntimeError(f"Audio speed adjustment failed: {exc.stderr}") from exc

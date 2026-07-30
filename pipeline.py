@@ -236,7 +236,21 @@ class ReupPipeline:
         try:
             logger.info("[INFO] Starting pipeline for input: %s", input_source)
 
-            target_language = self.sanitize_lang_code(target_language)
+            if isinstance(target_language, (set, list, tuple)):
+                target_language = list(target_language)[0] if len(target_language) > 0 else "vi"
+            target_language = str(target_language or "vi").strip().lower()
+            if "(" in target_language:
+                target_language = target_language.split("(")[0].strip()
+            lang_map = {
+                "zh": "zh-CN",
+                "zh-cn": "zh-CN",
+                "zh-tw": "zh-TW",
+                "vi": "vi-VN",
+                "en": "en-US",
+                "ja": "ja-JP",
+                "ko": "ko-KR",
+            }
+            target_language = lang_map.get(target_language, target_language)
             api_target_language = self._normalize_language_for_api(target_language)
 
             video_path = self._resolve_input_file(input_source)
@@ -311,7 +325,14 @@ class ReupPipeline:
             translated_segments = []
             if subtitle_mode in {"Translated", "Dual"} or (tts_mode == "Translated narration"):
                 logger.info("[INFO] Step 3/6: Translating OCR text to %s...", subtitle_language)
-                translated_segments = self._translate_segments(original_segments, subtitle_language, openrouter_api_key)
+                if auto_rewrite:
+                    try:
+                        self.rewriter.set_api_key(openrouter_api_key)
+                        translated_segments = self.rewriter.rewrite_segments(original_segments, api_target_language)
+                    except Exception as exc:
+                        logger.warning("AI segment rewrite failed, falling back to simple translation: %s", exc)
+                if not translated_segments:
+                    translated_segments = self._translate_segments(original_segments, subtitle_language, openrouter_api_key)
 
             if subtitle_mode == "Translated" and translated_segments:
                 subtitle_segments = translated_segments
@@ -368,6 +389,20 @@ class ReupPipeline:
                         target_language=api_target_language,
                     )
                 )
+
+            try:
+                audio_duration = self.ffmpeg_processor.get_media_duration(str(audio_output_path))
+                target_duration = original_segments[-1]["end"] if original_segments else None
+                if target_duration and audio_duration > 0 and abs(audio_duration - target_duration) > 0.05:
+                    adjusted_audio_path = self.temp_dir / "new_voice_timesync.mp3"
+                    self.ffmpeg_processor.adjust_audio_speed(
+                        str(audio_output_path),
+                        str(adjusted_audio_path),
+                        audio_duration / target_duration,
+                    )
+                    audio_output_path = adjusted_audio_path
+            except Exception as exc:
+                logger.warning("Audio time-sync adjustment failed: %s", exc)
 
             logger.info("[INFO] Step 5/6: Burning subtitles into video...")
             styled_video_path = self.temp_dir / "styled_video.mp4"
