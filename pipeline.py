@@ -10,10 +10,14 @@ import yaml
 
 from core.downloader import VideoDownloader
 from core.ffmpeg_processor import FFmpegProcessor
+from core.inpainter import VideoInpainter
+from core.ocr_processor import OCRProcessor
 from core.rewriter import LLMRewriter
 from core.transcriber import WhisperTranscriber
 from core.tts_engine import TTSEngine
+from core.translation import TranslationEngine
 from core.upscaler import VideoUpscaler
+from core.subtitle_renderer import SubtitleRenderer
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +33,13 @@ class ReupPipeline:
 
         self.downloader = VideoDownloader(config_path=self.config_path)
         self.transcriber = WhisperTranscriber(config_path=self.config_path)
+        self.ocr_processor = OCRProcessor(config_path=self.config_path)
         self.rewriter = LLMRewriter(config_path=self.config_path)
+        self.translator = TranslationEngine(config_path=self.config_path)
         self.tts_engine = TTSEngine(config_path=self.config_path)
+        self.subtitle_renderer = SubtitleRenderer(config_path=self.config_path)
         self.ffmpeg_processor = FFmpegProcessor(config_path=self.config_path)
+        self.inpainter = VideoInpainter(config_path=self.config_path)
         self.video_upscaler = VideoUpscaler(config_path=self.config_path)
 
         self.temp_dir = self._resolve_project_path(self.app_config.get("temp_dir", "temp"), default="temp")
@@ -96,6 +104,29 @@ class ReupPipeline:
         seconds_part, milliseconds = divmod(remainder, 1000)
         return f"{hours:02d}:{minutes:02d}:{seconds_part:02d},{milliseconds:03d}"
 
+    def _normalize_language(self, language: Optional[str]) -> str:
+        if not language:
+            return "vi"
+        return str(language).split()[0].split("(")[0].strip()
+
+    def _translate_segments(self, segments: Sequence[dict], target_language: str, api_key: Optional[str] = None) -> list[dict]:
+        translated_segments: list[dict] = []
+        for segment in segments:
+            text = str(segment.get("text", "")).strip()
+            if not text:
+                continue
+            try:
+                translated = self.translator.translate_text(text, target_language, api_key=api_key)
+            except Exception as exc:
+                logger.warning("Translation failed for segment: %s", exc)
+                translated = text
+            translated_segments.append({
+                "start": float(segment.get("start", 0.0)),
+                "end": float(segment.get("end", segment.get("start", 0.0))),
+                "text": translated,
+            })
+        return translated_segments
+
     def _write_srt_file(self, segments: Sequence[dict], output_path: Path) -> Path:
         """Write transcription segments to a .srt file in the temp directory."""
         output_file = Path(output_path)
@@ -146,9 +177,14 @@ class ReupPipeline:
         custom_voice: Optional[str] = None,
         openrouter_api_key: Optional[str] = None,
         tts_engine_mode: Optional[str] = "Edge-TTS Free (Tốc độ cao)",
+        tts_mode: Optional[str] = "Translated narration",
         reference_audio_path: Optional[str] = None,
         voice_preset: Optional[str] = None,
-        subtitle_font: Optional[str] = "Arial",
+        subtitle_mode: str = "Original",
+        inpaint_mode: str = "propainter",
+        auto_detect_subtitles: bool = True,
+        auto_remove_watermark: bool = True,
+        subtitle_font: Optional[str] = "DejaVu Sans",
         subtitle_size: int = 32,
         subtitle_color: str = "#FFFFFF",
         subtitle_outline_color: str = "#000000",
@@ -165,34 +201,100 @@ class ReupPipeline:
             logger.info("[INFO] Starting pipeline for input: %s", input_source)
 
             video_path = self._resolve_input_file(input_source)
+            processed_video = Path(video_path)
 
-            logger.info("[INFO] Step 2/5: Transcribing video content...")
-            transcription = self.transcriber.transcribe(video_path)
-            full_text = transcription.get("full_text", "")
-            if not full_text.strip():
-                raise ValueError("Transcription produced empty text")
+            logger.info("[INFO] Step 1/6: Running video cleanup with inpainting mode '%s'...", inpaint_mode)
+            output_clean = self.temp_dir / "cleaned_video.mp4"
+            mask_video = None
+            if auto_detect_subtitles or auto_remove_watermark:
+                mask_image_path = self.temp_dir / "mask.png"
+                mask_video = self.ocr_processor.build_mask_image(str(processed_video), str(mask_image_path), original_segments) if original_segments else None
+            processed_video = Path(
+                self.inpainter.clean_video(
+                    str(processed_video),
+                    str(output_clean),
+                    mode=inpaint_mode,
+                    mask_video_path=mask_video,
+                )
+            )
 
-            if auto_rewrite:
-                logger.info("[INFO] Step 3/5: Rewriting script with OpenRouter AI...")
-                self.rewriter.set_api_key(openrouter_api_key)
-                rewritten_text = self.rewriter.rewrite(full_text, target_lang=target_language or "vi")
+            logger.info("[INFO] Step 2/6: Detecting on-screen text with OCR...")
+            ocr_data = self.ocr_processor.detect_text(str(processed_video))
+            original_segments: list[dict] = [
+                {
+                    "start": float(item.get("start_time", item.get("start", 0.0))),
+                    "end": float(item.get("end_time", item.get("end", item.get("start", 0.0)))),
+                    "text": str(item.get("text", "")).strip(),
+                }
+                for item in ocr_data.get("segments", [])
+                if str(item.get("text", "")).strip()
+            ]
+
+            if not original_segments:
+                logger.info("[INFO] No OCR segments were detected; falling back to audio transcription...")
+                transcript_data = self.transcriber.transcribe(str(processed_video))
+                original_segments = [
+                    {
+                        "start": float(segment.get("start", 0.0)),
+                        "end": float(segment.get("end", segment.get("start", 0.0))),
+                        "text": str(segment.get("text", "")).strip(),
+                    }
+                    for segment in transcript_data.get("segments", [])
+                    if str(segment.get("text", "")).strip()
+                ]
+                ocr_data = transcript_data
+
+            if not original_segments:
+                raise RuntimeError("No text was extracted by OCR or transcription.")
+
+            subtitle_mode = subtitle_mode.title()
+            subtitle_language = self._normalize_language(target_language)
+            translated_segments = []
+            if subtitle_mode in {"Translated", "Dual"} or (tts_mode == "Translated narration"):
+                logger.info("[INFO] Step 3/6: Translating OCR text to %s...", subtitle_language)
+                translated_segments = self._translate_segments(original_segments, subtitle_language, openrouter_api_key)
+
+            if subtitle_mode == "Translated" and translated_segments:
+                subtitle_segments = translated_segments
+            elif subtitle_mode == "Dual" and translated_segments:
+                subtitle_segments = [
+                    {
+                        "start": orig["start"],
+                        "end": orig["end"],
+                        "text": f"{orig['text']} | {trans['text']}",
+                    }
+                    for orig, trans in zip(original_segments, translated_segments)
+                ]
             else:
-                logger.info("[INFO] Step 3/5: Using original transcript without rewrite")
-                rewritten_text = full_text
+                subtitle_segments = original_segments
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            srt_path = self.temp_dir / "sub.srt"
-            self._write_srt_file(transcription.get("segments", []), srt_path)
+            subtitle_path = self.temp_dir / "subtitle_overlay.srt"
+            self._write_srt_file(subtitle_segments, subtitle_path)
+
+            rewritten_text: Optional[str] = None
+            if auto_rewrite:
+                try:
+                    self.rewriter.set_api_key(openrouter_api_key)
+                    rewritten_text = self.rewriter.rewrite(ocr_data.get("full_text", ""), subtitle_language)
+                except Exception as exc:
+                    logger.warning("AI rewrite step failed: %s", exc)
+
+            narration_text = rewritten_text or (
+                " ".join(item["text"] for item in translated_segments)
+                if tts_mode == "Translated narration" and translated_segments
+                else ocr_data.get("full_text", "")
+            )
+            narration_text = narration_text.strip() or ocr_data.get("full_text", "")
 
             audio_output_path = self.temp_dir / "new_voice.mp3"
-            logger.info("[INFO] Step 4/5: Generating new speech audio at %s...", audio_output_path)
+            logger.info("[INFO] Step 4/6: Generating narration audio...")
             if str(tts_engine_mode or "").lower().startswith("local"):
                 asyncio.run(
                     self.tts_engine.clone_speech(
-                        rewritten_text,
+                        narration_text,
                         str(audio_output_path),
                         reference_audio_path=reference_audio_path,
-                        target_language=target_language,
+                        target_language=subtitle_language,
                         voice=custom_voice,
                         voice_preset=voice_preset,
                     )
@@ -200,21 +302,38 @@ class ReupPipeline:
             else:
                 asyncio.run(
                     self.tts_engine.generate_speech(
-                        rewritten_text,
+                        narration_text,
                         str(audio_output_path),
                         voice=custom_voice,
                         engine_mode="edge",
                     )
                 )
 
-            output_video_path = self.output_dir / f"reup_{timestamp}.mp4"
-            logger.info("[INFO] Step 5/5: Rendering final video...")
-            rendered_path = self.ffmpeg_processor.render_reup_video(
-                video_path=video_path,
+            logger.info("[INFO] Step 5/6: Burning subtitles into video...")
+            styled_video_path = self.temp_dir / "styled_video.mp4"
+            subtitle_style = {
+                "font": subtitle_font or "Arial",
+                "size": str(subtitle_size),
+                "color": subtitle_color or "#FFFFFF",
+                "border": subtitle_outline_color or "#000000",
+                "shadow": subtitle_outline_color or "#000000",
+            }
+            rendered_subtitle_video = self.subtitle_renderer.render_subtitles(
+                str(processed_video),
+                str(styled_video_path),
+                str(subtitle_path),
+                subtitle_mode.lower(),
+                subtitle_style,
+            )
+
+            output_video_path = self.output_dir / f"reup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+            logger.info("[INFO] Step 6/6: Final rendering with audio, speed, and ratio adjustments...")
+            final_rendered = self.ffmpeg_processor.render_reup_video(
+                video_path=rendered_subtitle_video,
                 new_audio_path=str(audio_output_path),
                 output_path=str(output_video_path),
-                srt_path=str(srt_path),
-                subtitle_text=rewritten_text,
+                srt_path=None,
+                subtitle_text=None,
                 subtitle_font=subtitle_font or "Arial",
                 subtitle_size=int(subtitle_size or 32),
                 subtitle_color=subtitle_color or "#FFFFFF",
@@ -227,20 +346,19 @@ class ReupPipeline:
                 target_language=target_language,
             )
 
+            final_output = final_rendered
             if enable_upscale:
                 upscale_value = 2 if str(upscale_factor).startswith("2x") else 4
-                upscale_output = self.output_dir / f"reup_{timestamp}_upscaled_{upscale_value}x.mp4"
-                logger.info("[INFO] Step 6/6: Upscaling rendered video to %sx", upscale_value)
-                rendered_path = self.video_upscaler.upscale(
-                    input_video_path=str(rendered_path),
+                upscale_output = self.output_dir / f"reup_{datetime.now().strftime('%Y%m%d_%H%M%S')}_upscaled_{upscale_value}x.mp4"
+                logger.info("[INFO] Upscaling final video to %sx...", upscale_value)
+                final_output = self.video_upscaler.upscale(
+                    input_video_path=str(final_rendered),
                     output_video_path=str(upscale_output),
                     scale=upscale_value,
                 )
 
-            logger.info("[INFO] Step 7/5: Cleaning temporary files...")
             self._clean_temp_files()
-
-            absolute_output = str(Path(rendered_path).resolve())
+            absolute_output = str(Path(final_output).resolve())
             logger.info("[INFO] Pipeline completed successfully: %s", absolute_output)
             return absolute_output
 

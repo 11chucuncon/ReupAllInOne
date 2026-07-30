@@ -22,6 +22,30 @@ tts:
   default_voice: "vi-VN-HoaiMyNeural"
   rate: "+0%"
   volume: "+0%"
+  default_engine: "edge"
+  xtts_model_name: "tts_models/multilingual/multi-dataset/xtts_v2"
+
+ocr:
+  languages: ["vi", "en", "zh", "ja", "ko"]
+  sample_rate: 1
+
+translation:
+  provider: "local"
+  target_language: "en"
+  model: "Helsinki-NLP/opus-mt-en-vi"
+
+inpaint:
+  enabled: true
+  model: "ProPainter"
+  mask_strategy: "subtitle"
+
+subtitle:
+  font: "Noto Sans"
+  size: 32
+  color: "#FFFFFF"
+  border: "#000000"
+  shadow: "#000000"
+  position: "bottom"
 
 ffmpeg:
   hflip: true

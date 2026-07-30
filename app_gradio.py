@@ -92,44 +92,63 @@ def create_app() -> gr.Blocks:
                             placeholder="https://www.youtube.com/watch?v=...\nhttps://www.tiktok.com/...",
                         )
 
-                auto_rewrite = gr.Checkbox(label="Rewrite script with AI", value=True)
+                auto_rewrite = gr.Checkbox(label="Use AI script rewrite", value=True)
                 target_language = gr.Dropdown(
                     label="Target Language (Ngôn ngữ đích)",
                     choices=[
                         "vi (Tiếng Việt)",
-                        "en (Tiếng Anh - English)",
-                        "zh (Tiếng Trung - Chinese)",
-                        "ja (Tiếng Nhật - Japanese)",
-                        "ko (Tiếng Hàn - Korean)",
-                        "th (Tiếng Thái - Thai)",
+                        "en (Tiếng Anh)",
+                        "zh (Tiếng Trung)",
+                        "ja (Tiếng Nhật)",
+                        "ko (Tiếng Hàn)",
                     ],
-                    value="vi (Tiếng Việt)",
+                    value="en (Tiếng Anh)",
                 )
                 gemini_api_key = gr.Textbox(
-                    label="OpenRouter API Key",
+                    label="Gemini / OpenRouter API Key",
                     type="password",
-                    placeholder="Enter your OpenRouter API key here",
+                    placeholder="Enter your Gemini/OpenRouter API key here",
                 )
                 tts_engine_mode = gr.Radio(
                     label="TTS Engine",
-                    choices=["Edge-TTS Free (Tốc độ cao)", "Local ElevenLabs-Style AI (XTTS v2 Clone)"],
+                    choices=["Edge-TTS Free (Tốc độ cao)", "Local XTTS v2 Clone"],
                     value="Edge-TTS Free (Tốc độ cao)",
                 )
+                tts_mode = gr.Radio(
+                    label="Audio narration source",
+                    choices=["Original language", "Translated narration"],
+                    value="Translated narration",
+                )
                 reference_audio = gr.Audio(
-                    label="Tải lên giọng mẫu (5-10s Audio) để Clone",
+                    label="Upload voice sample for cloning (5-10s)",
                     type="filepath",
                     visible=False,
                 )
                 voice_preset = gr.Dropdown(
-                    label="Preset giọng mẫu",
+                    label="Voice clone preset",
                     choices=["Nam/Nữ Review phim", "Truyện ngụ ngôn", "News Anchor", "Narrator"],
                     value="Nam/Nữ Review phim",
                     visible=False,
                 )
                 voice_dropdown = gr.Dropdown(
                     label="TTS Voice",
-                    choices=_get_voice_choices("vi"),
-                    value="vi-VN-HoaiMyNeural (Nữ Miền Bắc - Truyền cảm)",
+                    choices=_get_voice_choices("en"),
+                    value="en-US-JennyNeural (Giọng nữ tiếng Anh)",
+                )
+                inpaint_tech = gr.Radio(
+                    label="Công nghệ xóa chữ/watermark",
+                    choices=[
+                        "ProPainter AI Inpainting (Xóa sạch 100% không mờ)",
+                        "Blur Fast (Làm mờ nhanh)",
+                    ],
+                    value="ProPainter AI Inpainting (Xóa sạch 100% không mờ)",
+                )
+                auto_detect_subs = gr.Checkbox(label="Tự động phát hiện & xóa Sub gốc", value=True)
+                auto_remove_watermark = gr.Checkbox(label="Tự động xóa Watermark/Logo góc video", value=True)
+                subtitle_mode = gr.Radio(
+                    label="Chế độ Phụ đề",
+                    choices=["Chỉ Sub Ngôn ngữ đích (Translated Only)", "Sub Kép (Gốc + Dịch)"],
+                    value="Chỉ Sub Ngôn ngữ đích (Translated Only)",
                 )
                 queue_status = gr.Textbox(label="Queue Status", value="Idle", interactive=False)
                 submit_btn = gr.Button("Start Reup")
@@ -145,8 +164,8 @@ def create_app() -> gr.Blocks:
                 gr.Markdown("Subtitle and render customization")
                 subtitle_font = gr.Dropdown(
                     label="Subtitle Font",
-                    choices=["Arial", "Roboto", "Impact", "Montserrat"],
-                    value="Arial",
+                    choices=["DejaVu Sans", "Noto Sans", "Noto Sans CJK SC"],
+                    value="DejaVu Sans",
                 )
                 subtitle_size = gr.Slider(label="Subtitle Size", minimum=12, maximum=72, value=32)
                 subtitle_color = gr.ColorPicker(label="Subtitle Color", value="#FFFFFF")
@@ -162,11 +181,11 @@ def create_app() -> gr.Blocks:
                     value="Keep original",
                 )
                 enable_upscale = gr.Checkbox(
-                    label="Bật AI Video Upscale (Nâng cấp độ phân giải)",
+                    label="Enable AI video upscale (1080p / 4K)",
                     value=False,
                 )
                 upscale_factor = gr.Radio(
-                    label="Mức độ Upscale",
+                    label="Upscale target",
                     choices=["2x (1080p Full HD)", "4x (4K Ultra HD)"],
                     value="2x (1080p Full HD)",
                 )
@@ -179,11 +198,16 @@ def create_app() -> gr.Blocks:
             online_links_value: Optional[str],
             auto_rewrite_value: bool,
             target_language_value: Optional[str],
-            openrouter_api_key_value: Optional[str],
+            gemini_api_key_value: Optional[str],
             tts_engine_mode_value: Optional[str],
+            tts_mode_value: Optional[str],
             reference_audio_value,
             voice_preset_value: Optional[str],
             voice_value: Optional[str],
+            inpaint_tech_value: Optional[str],
+            auto_detect_subs_value: bool,
+            auto_remove_watermark_value: bool,
+            subtitle_mode_value: Optional[str],
             subtitle_font_value: Optional[str],
             subtitle_size_value: Optional[float],
             subtitle_color_value: Optional[str],
@@ -201,16 +225,27 @@ def create_app() -> gr.Blocks:
 
                 input_source = _resolve_input_source(uploaded_value, online_links_value)
                 pipeline = ReupPipeline()
+                subtitle_mode_internal = (
+                    "Dual" if subtitle_mode_value == "Sub Kép (Gốc + Dịch)" else "Translated"
+                )
+                inpaint_mode_internal = (
+                    "propainter" if inpaint_tech_value and inpaint_tech_value.startswith("ProPainter") else "blur"
+                )
                 result_path = pipeline.process_video(
                     input_source=input_source,
                     auto_rewrite=auto_rewrite_value,
                     target_language=target_language_value,
                     custom_voice=_map_voice_label(voice_value),
-                    openrouter_api_key=openrouter_api_key_value,
+                    openrouter_api_key=gemini_api_key_value,
                     tts_engine_mode=tts_engine_mode_value or "Edge-TTS Free (Tốc độ cao)",
+                    tts_mode=tts_mode_value or "Translated narration",
                     reference_audio_path=reference_audio_value if isinstance(reference_audio_value, str) else None,
                     voice_preset=voice_preset_value,
-                    subtitle_font=subtitle_font_value or "Arial",
+                    subtitle_mode=subtitle_mode_internal,
+                    inpaint_mode=inpaint_mode_internal,
+                    auto_detect_subtitles=bool(auto_detect_subs_value),
+                    auto_remove_watermark=bool(auto_remove_watermark_value),
+                    subtitle_font=subtitle_font_value or "DejaVu Sans",
                     subtitle_size=int(subtitle_size_value or 32),
                     subtitle_color=subtitle_color_value or "#FFFFFF",
                     subtitle_outline_color=subtitle_outline_color_value or "#000000",
@@ -264,9 +299,14 @@ def create_app() -> gr.Blocks:
                 target_language,
                 gemini_api_key,
                 tts_engine_mode,
+                tts_mode,
                 reference_audio,
                 voice_preset,
                 voice_dropdown,
+                inpaint_tech,
+                auto_detect_subs,
+                auto_remove_watermark,
+                subtitle_mode,
                 subtitle_font,
                 subtitle_size,
                 subtitle_color,

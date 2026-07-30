@@ -4,6 +4,7 @@ google-generativeai
 edge-tts
 torch
 torchaudio
+TTS
 realesrgan
 facexlib
 gfpgan
@@ -11,3 +12,7 @@ basicsr
 gradio
 pyyaml
 pyngrok
+easyocr
+opencv-python-headless
+transformers
+sentencepiece
