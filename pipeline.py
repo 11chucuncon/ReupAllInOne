@@ -21,7 +21,8 @@ class ReupPipeline:
     """Coordinate the full auto-reup video workflow."""
 
     def __init__(self, config_path: Optional[str] = None) -> None:
-        self.config_path = config_path or str(Path(__file__).resolve().parent / "config" / "settings.yaml")
+        self.project_root = Path(__file__).resolve().parent
+        self.config_path = config_path or str(self.project_root / "config" / "settings.yaml")
         self.settings = self._load_settings()
         self.app_config = self.settings.get("app", {})
 
@@ -31,10 +32,17 @@ class ReupPipeline:
         self.tts_engine = TTSEngine(config_path=self.config_path)
         self.ffmpeg_processor = FFmpegProcessor(config_path=self.config_path)
 
-        self.temp_dir = Path(self.app_config.get("temp_dir", "temp"))
-        self.output_dir = Path(self.app_config.get("output_dir", "outputs"))
+        self.temp_dir = self._resolve_project_path(self.app_config.get("temp_dir", "temp"), default="temp")
+        self.output_dir = self._resolve_project_path(self.app_config.get("output_dir", "outputs"), default="outputs")
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def _resolve_project_path(self, value: Optional[str], default: str) -> Path:
+        """Resolve a path relative to the project root into an absolute path."""
+        path = Path(value or default)
+        if not path.is_absolute():
+            path = self.project_root / path
+        return path.expanduser().resolve()
 
     def _load_settings(self) -> dict:
         """Load configuration from config/settings.yaml."""
@@ -78,6 +86,45 @@ class ReupPipeline:
 
         raise ValueError("Input source must be a valid file path or URL")
 
+    def _format_srt_timestamp(self, seconds: float) -> str:
+        """Convert seconds to SRT timestamp format."""
+        total_milliseconds = int(seconds * 1000)
+        hours, remainder = divmod(total_milliseconds, 3600 * 1000)
+        minutes, remainder = divmod(remainder, 60 * 1000)
+        seconds_part, milliseconds = divmod(remainder, 1000)
+        return f"{hours:02d}:{minutes:02d}:{seconds_part:02d},{milliseconds:03d}"
+
+    def _write_srt_file(self, segments: Sequence[dict], output_path: Path) -> Path:
+        """Write transcription segments to a .srt file in the temp directory."""
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        lines: list[str] = []
+        for index, segment in enumerate(segments, start=1):
+            text = str(segment.get("text", "")).strip()
+            if not text:
+                continue
+            start_time = self._format_srt_timestamp(float(segment.get("start", 0.0)))
+            end_time = self._format_srt_timestamp(float(segment.get("end", segment.get("start", 0.0))))
+            lines.extend([
+                str(index),
+                f"{start_time} --> {end_time}",
+                text,
+                "",
+            ])
+
+        if not lines:
+            lines = [
+                "1",
+                "00:00:00,000 --> 00:00:01,000",
+                "",
+                "",
+            ]
+
+        output_file.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+        logger.info("[INFO] Wrote subtitle file to %s", output_file)
+        return output_file
+
     def _clean_temp_files(self) -> None:
         """Remove temporary files that are no longer needed after rendering."""
         try:
@@ -117,7 +164,7 @@ class ReupPipeline:
                 raise ValueError("Transcription produced empty text")
 
             if auto_rewrite:
-                logger.info("[INFO] Step 3/5: Rewriting script with Gemini AI...")
+                logger.info("[INFO] Step 3/5: Rewriting script with OpenRouter AI...")
                 self.rewriter.set_api_key(openrouter_api_key)
                 rewritten_text = self.rewriter.rewrite(full_text)
             else:
@@ -125,8 +172,11 @@ class ReupPipeline:
                 rewritten_text = full_text
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            audio_output_path = self.temp_dir / f"new_voice_{timestamp}.mp3"
-            logger.info("[INFO] Step 4/5: Generating new speech audio...")
+            srt_path = self.temp_dir / "sub.srt"
+            self._write_srt_file(transcription.get("segments", []), srt_path)
+
+            audio_output_path = self.temp_dir / "new_voice.mp3"
+            logger.info("[INFO] Step 4/5: Generating new speech audio at %s...", audio_output_path)
             asyncio.run(
                 self.tts_engine.generate_speech(
                     rewritten_text,
@@ -141,6 +191,7 @@ class ReupPipeline:
                 video_path=video_path,
                 new_audio_path=str(audio_output_path),
                 output_path=str(output_video_path),
+                srt_path=str(srt_path),
                 subtitle_text=rewritten_text,
                 subtitle_font=subtitle_font or "Arial",
                 subtitle_size=int(subtitle_size or 32),

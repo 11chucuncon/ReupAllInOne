@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -95,9 +96,9 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
         background_audio_path: Optional[str] = None,
     ) -> str:
         """Render a reup video with optional flipping, speed changes, audio replacement, subtitles, and ratio adjustments."""
-        input_video = Path(video_path)
-        input_audio = Path(new_audio_path)
-        output_file = Path(output_path)
+        input_video = Path(video_path).expanduser().resolve()
+        input_audio = Path(new_audio_path).expanduser().resolve()
+        output_file = Path(output_path).expanduser().resolve()
 
         if not input_video.exists():
             raise FileNotFoundError(f"Input video not found: {video_path}")
@@ -118,7 +119,7 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
 
         subtitle_file = None
         if srt_path:
-            srt_file = Path(srt_path)
+            srt_file = Path(srt_path).expanduser().resolve()
             if not srt_file.exists():
                 raise FileNotFoundError(f"Subtitle file not found: {srt_path}")
             subtitle_file = srt_file
@@ -134,7 +135,13 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
             )
 
         if subtitle_file:
-            vf_parts.append(f"subtitles={subtitle_file.resolve().as_posix()}")
+            subtitle_filter = (
+                f"subtitles={subtitle_file.as_posix()}:"
+                f"force_style='Fontname={subtitle_font},Fontsize={subtitle_size},"
+                f"PrimaryColour={self._hex_to_ass_color(subtitle_color)},"
+                f"OutlineColour={self._hex_to_ass_color(subtitle_outline_color)}'"
+            )
+            vf_parts.append(subtitle_filter)
 
         speed_value = self.speed_factor if speed_factor is None else speed_factor
         if speed_value != 1.0:
@@ -144,15 +151,15 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
             command.extend(["-vf", ",".join(vf_parts)])
 
         if background_audio_path:
-            background_audio = Path(background_audio_path)
+            background_audio = Path(background_audio_path).expanduser().resolve()
             if not background_audio.exists():
                 raise FileNotFoundError(f"Background audio file not found: {background_audio_path}")
             command.extend(["-i", str(background_audio)])
-            if speed_value != 1.0:
-                command.extend(["-filter_complex", "[1:a][2:a]amix=inputs=2:duration=longest[a]", "-map", "0:v", "-map", "[a]"])
-            else:
-                command.extend(["-filter_complex", "[1:a][2:a]amix=inputs=2:duration=longest[a]", "-map", "0:v", "-map", "[a]"])
-        elif speed_value != 1.0:
+            command.extend(["-filter_complex", "[1:a][2:a]amix=inputs=2:duration=longest[a]", "-map", "0:v", "-map", "[a]"])
+        else:
+            command.extend(["-map", "0:v", "-map", "1:a"])
+
+        if speed_value != 1.0 and not background_audio_path:
             command.extend(["-af", f"atempo={speed_value}"])
 
         codec = "h264_nvenc" if self.use_nvenc else "libx264"
@@ -165,6 +172,10 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
             "+faststart",
             str(output_file),
         ])
+
+        ffmpeg_command = " ".join(shlex.quote(part) for part in command)
+        logger.info("Running FFmpeg command: %s", ffmpeg_command)
+        print(f"[FFmpeg] {ffmpeg_command}")
 
         try:
             subprocess.run(command, check=True, capture_output=True, text=True)
