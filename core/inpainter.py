@@ -123,11 +123,15 @@ class VideoInpainter:
             import torch
             import torchvision.io
 
-            def read_frame_from_videos(video_path):
-                capture = cv2.VideoCapture(video_path)
+            def custom_read_video(filename, *args, **kwargs):
+                video_path = filename if isinstance(filename, str) else kwargs.get('filename', '')
+                capture = cv2.VideoCapture(str(video_path))
                 if not capture.isOpened():
-                    raise RuntimeError(f'Could not open video for ProPainter fallback: {{video_path}}')
+                    raise RuntimeError(f'Could not open video: {{video_path}}')
 
+                fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
+                width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
                 frames = []
                 while True:
                     ret, frame = capture.read()
@@ -140,9 +144,35 @@ class VideoInpainter:
                 if not frames:
                     raise RuntimeError(f'No frames were decoded from {{video_path}}')
 
-                return torch.stack(frames)
+                vframes = torch.stack(frames)
+                aframes = torch.empty((0, 0))
+                info = {{'video_fps': fps}}
+                return vframes, aframes, info
 
-            torchvision.io.read_video = read_frame_from_videos
+            def read_frame_from_videos(video_path, *args, **kwargs):
+                capture = cv2.VideoCapture(str(video_path))
+                if not capture.isOpened():
+                    raise RuntimeError(f'Could not open video for ProPainter fallback: {{video_path}}')
+
+                fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
+                width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                frames = []
+                while True:
+                    ret, frame = capture.read()
+                    if not ret:
+                        break
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    frames.append(torch.from_numpy(rgb_frame))
+
+                capture.release()
+                if not frames:
+                    raise RuntimeError(f'No frames were decoded from {{video_path}}')
+
+                vframes = torch.stack(frames)
+                return vframes, fps, (height, width), str(video_path)
+
+            torchvision.io.read_video = custom_read_video
             sys.argv = {json.dumps(args)}
             runpy.run_path({json.dumps(str(script_path))}, run_name='__main__')
             """
