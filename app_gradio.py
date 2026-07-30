@@ -5,7 +5,7 @@ from typing import Optional, Sequence, Union
 
 import gradio as gr
 
-from config import OUTPUT_DIR
+from config import OUTPUT_DIR, TEMP_DIR
 
 
 class ProgressReporter:
@@ -261,6 +261,17 @@ def create_app() -> gr.Blocks:
                 hflip_checkbox = gr.Checkbox(label="Flip horizontally", value=True)
                 background_audio = gr.File(label="Background Music (optional)", file_types=[".mp3", ".wav", ".m4a"])
 
+        def _extract_file_path(file_value: object) -> Optional[str]:
+            if isinstance(file_value, (list, tuple)):
+                if not file_value:
+                    return None
+                file_value = file_value[0]
+            if isinstance(file_value, str):
+                return file_value
+            if hasattr(file_value, "name"):
+                return getattr(file_value, "name")
+            return None
+
         def process_video(
             uploaded_value,
             online_links_value: Optional[str],
@@ -316,7 +327,7 @@ def create_app() -> gr.Blocks:
                     openrouter_api_key=translation_api_key_value or gemini_api_key_value,
                     tts_engine_mode=tts_engine_mode_value or "Edge-TTS Free (Tốc độ cao)",
                     tts_mode=tts_mode_value or "Translated narration",
-                    reference_audio_path=reference_audio_value if isinstance(reference_audio_value, str) else None,
+                    reference_audio_path=_extract_file_path(reference_audio_value),
                     voice_preset=voice_preset_value,
                     subtitle_mode=subtitle_mode_internal,
                     inpaint_mode=inpaint_mode_internal,
@@ -337,7 +348,7 @@ def create_app() -> gr.Blocks:
                     propainter_enable_vram_cleanup=bool(propainter_cleanup_vram_value),
                     speed_factor=float(speed_value or 1.05),
                     hflip=bool(hflip_value),
-                    background_audio_path=background_audio_value[0] if isinstance(background_audio_value, (list, tuple)) and background_audio_value else None,
+                    background_audio_path=_extract_file_path(background_audio_value),
                 )
                 reporter.update(0.95, "Finalizing output video...")
                 return (
@@ -421,8 +432,7 @@ if __name__ == "__main__":
         share=True,
         debug=True,
         allowed_paths=[
-            "/content/workspace",
-            "/content/workspace/output",
-            "/content/workspace/temp",
+            str(OUTPUT_DIR),
+            str(TEMP_DIR),
         ],
     )
