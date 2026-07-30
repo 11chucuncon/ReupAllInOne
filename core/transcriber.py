@@ -20,17 +20,20 @@ class WhisperTranscriber:
 
         model_size = self.whisper_config.get("model_size", "small")
         device = device or self.whisper_config.get("device", "cuda")
-        desired_compute_type = self.whisper_config.get("compute_type", None)
 
         if device == "cpu":
-            compute_type = desired_compute_type or "int8"
+            compute_type = "int8"
         elif device == "cuda":
-            compute_type = desired_compute_type or "float16"
+            compute_type = "float16"
         else:
-            compute_type = desired_compute_type or "float32"
+            compute_type = "default"
 
         try:
-            self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
+            self.model = WhisperModel(
+                model_size,
+                device=device,
+                compute_type=compute_type,
+            )
         except Exception as exc:
             logger.exception("Unable to initialize Whisper model")
             raise RuntimeError(f"Whisper initialization failed: {exc}") from exc
