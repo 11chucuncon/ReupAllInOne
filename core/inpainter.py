@@ -339,6 +339,23 @@ class VideoInpainter:
                     pass
             raise
 
+    def _has_valid_mask(self, mask_source: Optional[str]) -> bool:
+        if not mask_source:
+            return False
+
+        mask_path = Path(mask_source).expanduser().resolve()
+        if not mask_path.exists():
+            return False
+
+        if mask_path.is_dir():
+            mask_files = [child for child in mask_path.iterdir() if child.is_file() and child.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp", ".webp"}]
+            return bool(mask_files)
+
+        if mask_path.is_file():
+            return mask_path.stat().st_size > 0
+
+        return False
+
     def _prepare_output_path(self, output_video_path: str) -> Path:
         output_path = Path(output_video_path).expanduser().resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -433,6 +450,14 @@ class VideoInpainter:
 
         if mode == "blur":
             return self._blur_video(input_video_path, str(output_path))
+
+        if not self._has_valid_mask(mask_video_path):
+            logger.info("[INFO] No watermark mask detected. Skipping ProPainter step.")
+            print("[INFO] No watermark mask detected. Skipping ProPainter step.")
+            for target_path in {output_path, self.cleaned_video_path}:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(input_video_path), str(target_path))
+            return str(output_path)
 
         self._ensure_propaint_repository()
         resized_input_path = self._resize_video_for_inpainting(input_video_path, str(output_path.parent / "resized_input.mp4"), resize_max_side=resize_max_side)
