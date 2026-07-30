@@ -4,7 +4,6 @@ google-generativeai
 edge-tts
 torch
 torchaudio
-TTS
 realesrgan
 facexlib
 gfpgan
