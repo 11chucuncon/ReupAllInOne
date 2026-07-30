@@ -297,8 +297,11 @@ class ReupPipeline:
                     fp16=propainter_fp16,
                     enable_vram_cleanup=propainter_enable_vram_cleanup,
                 )
-                processed_video = resolve_workspace_media_file(cleaned_video_path, expected_suffix=".mp4")
-                processed_video = Path(processed_video)
+                cleaned_path = Path(cleaned_video_path)
+                if cleaned_path.exists() and cleaned_path.is_file():
+                    processed_video = cleaned_path
+                else:
+                    processed_video = Path(resolve_workspace_media_file(cleaned_video_path, expected_suffix=".mp4"))
             else:
                 logger.info("[INFO] No watermark or text objects found. Copying original video to cleaned_video.mp4")
                 shutil.copy2(str(processed_video), str(self.cleaned_video_path))

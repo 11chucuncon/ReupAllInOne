@@ -127,7 +127,6 @@ def initialize_workspace(clear_existing: bool = True) -> Dict[str, Path]:
 def resolve_workspace_media_file(target_path: str | Path, expected_suffix: str = ".mp4") -> Path:
     """Ensure the target path resolves to a real media file inside the workspace."""
     path = Path(target_path).expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
 
     if path.exists() and path.is_file():
         if path.suffix.lower() == expected_suffix.lower():
@@ -149,4 +148,7 @@ def resolve_workspace_media_file(target_path: str | Path, expected_suffix: str =
         shutil.copy2(str(preferred), str(resolved_output))
         return resolved_output
 
-    raise FileNotFoundError(f"Workspace media file not found: {path}")
+    if not path.exists():
+        raise FileNotFoundError(f"Media file or directory does not exist: {path}")
+
+    return path
