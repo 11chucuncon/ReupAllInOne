@@ -120,8 +120,23 @@ class OCRProcessor:
             "segments": segments,
         }
 
-    def build_mask_image(self, video_path: str, output_path: str, segments: list[dict[str, Any]]) -> Optional[str]:
-        if not segments:
+    def _expand_bbox(self, bbox: list[list[int]], original_width: int, original_height: int, padding_ratio: float = 0.05) -> tuple[int, int, int, int]:
+        x_coords = [pt[0] for pt in bbox]
+        y_coords = [pt[1] for pt in bbox]
+        x0 = max(0, int(min(x_coords) - original_width * padding_ratio))
+        x1 = min(original_width, int(max(x_coords) + original_width * padding_ratio))
+        y0 = max(0, int(min(y_coords) - original_height * padding_ratio))
+        y1 = min(original_height, int(max(y_coords) + original_height * padding_ratio))
+        return x0, y0, x1, y1
+
+    def build_mask_image(
+        self,
+        video_path: str,
+        output_path: str,
+        segments: list[dict[str, Any]],
+        auto_remove_watermark: bool = False,
+    ) -> Optional[str]:
+        if not segments and not auto_remove_watermark:
             return None
 
         original_width, original_height = self._get_video_resolution(video_path)
@@ -133,13 +148,35 @@ class OCRProcessor:
                 continue
             pts = np.array(bbox, dtype=np.int32)
             if pts.shape == (4, 2):
-                cv2.fillPoly(mask, [pts], color=255)
+                x0, y0, x1, y1 = self._expand_bbox(bbox, original_width, original_height)
+                cv2.rectangle(mask, (x0, y0), (x1, y1), color=255, thickness=-1)
             else:
                 x_coords = pts[:, 0]
                 y_coords = pts[:, 1]
                 x0, x1 = int(np.min(x_coords)), int(np.max(x_coords))
                 y0, y1 = int(np.min(y_coords)), int(np.max(y_coords))
+                x0, y0, x1, y1 = self._expand_bbox([[x0, y0], [x1, y1]], original_width, original_height)
                 cv2.rectangle(mask, (x0, y0), (x1, y1), color=255, thickness=-1)
+
+        if auto_remove_watermark:
+            corner_width = int(original_width * 0.18)
+            corner_height = int(original_height * 0.12)
+            margin = int(original_width * 0.02)
+            top_left = (margin, margin, corner_width, corner_height)
+            top_right = (original_width - corner_width - margin, margin, original_width - margin, corner_height)
+            bottom_left = (margin, original_height - corner_height - margin, corner_width, original_height - margin)
+            bottom_right = (
+                original_width - corner_width - margin,
+                original_height - corner_height - margin,
+                original_width - margin,
+                original_height - margin,
+            )
+            for rect in (top_left, top_right, bottom_left, bottom_right):
+                x0, y0, x1, y1 = rect
+                cv2.rectangle(mask, (x0, y0), (x1, y1), color=255, thickness=-1)
+
+            strip_height = int(original_height * 0.12)
+            cv2.rectangle(mask, (0, original_height - strip_height), (original_width, original_height), color=255, thickness=-1)
 
         output_image = Path(output_path)
         output_image.parent.mkdir(parents=True, exist_ok=True)

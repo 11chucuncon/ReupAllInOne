@@ -47,6 +47,23 @@ class LLMRewriter:
             logger.error("Failed to parse settings YAML: %s", exc)
             raise RuntimeError("Invalid YAML configuration") from exc
 
+    def _normalize_target_lang(self, target_lang: Optional[object]) -> str:
+        if isinstance(target_lang, (set, list, tuple)):
+            target_lang = list(target_lang)[0] if len(target_lang) > 0 else "vi"
+        raw = str(target_lang or "vi").strip()
+        if not raw:
+            raw = "vi"
+        return raw.split()[0].split("(")[0].strip().lower()
+
+    def _normalize_language_for_api(self, target_lang: Optional[object]) -> str:
+        return {
+            "vi": "vi-VN",
+            "en": "en-US",
+            "zh": "zh-CN",
+            "ja": "ja-JP",
+            "ko": "ko-KR",
+        }.get(self._normalize_target_lang(target_lang), "vi-VN")
+
     def rewrite(self, text: str, target_lang: str = "vi") -> str:
         """Rewrite and translate input text via the OpenRouter API or raise a clear error if the API key is missing."""
         if not text or not text.strip():
@@ -58,10 +75,10 @@ class LLMRewriter:
             )
 
         try:
-            lang_code = (target_lang or "vi").split()[0].split("(")[0].strip()
+            target_lang = self._normalize_language_for_api(target_lang)
             prompt = (
-                f"Hãy dịch và viết lại kịch bản sau đây sang {lang_code} theo phong cách cuốn hút, tự nhiên, "
-                f"chuẩn văn phong video ngắn ngắn (Shorts/TikTok). Chỉ trả về nội dung kịch bản bằng {lang_code}, không kèm giải thích:\n\n{text}"
+                f"Hãy dịch và viết lại kịch bản sau đây sang {target_lang} theo phong cách cuốn hút, tự nhiên, "
+                f"chuẩn văn phong video ngắn ngắn (Shorts/TikTok). Chỉ trả về nội dung kịch bản bằng {target_lang}, không kèm giải thích:\n\n{text}"
             )
             payload = {
                 "model": self.model_name,

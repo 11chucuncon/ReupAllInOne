@@ -41,13 +41,13 @@ class TTSEngine:
         """Normalize a target language code for XTTS."""
         language_code = (target_language or "vi").split()[0].split("(")[0].strip().lower()
         return {
-            "vi": "vi",
-            "en": "en",
-            "zh": "zh",
-            "ja": "ja",
-            "ko": "ko",
-            "th": "th",
-        }.get(language_code, "en")
+            "vi": "vi-VN",
+            "en": "en-US",
+            "zh": "zh-CN",
+            "ja": "ja-JP",
+            "ko": "ko-KR",
+            "th": "th-TH",
+        }.get(language_code, "en-US")
 
     def _resolve_reference_audio(self, reference_audio_path: Optional[str], voice_preset: Optional[str] = None) -> Optional[Path]:
         """Resolve a local reference audio file for voice cloning."""

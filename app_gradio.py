@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 
 import gradio as gr
 
@@ -66,6 +66,15 @@ def _resolve_input_source(uploaded_files: Optional[Sequence[str]], online_links:
             return links[0]
 
     raise ValueError("Please provide at least one local video or one valid online link")
+
+
+def _normalize_target_language(language: Optional[Union[str, Sequence[str], set, tuple]]) -> str:
+    if isinstance(language, (set, list, tuple)):
+        language = list(language)[0] if len(language) > 0 else "vi"
+    raw = str(language or "vi").strip()
+    if not raw:
+        raw = "vi"
+    return raw.split()[0].split("(")[0].strip().lower()
 
 
 def create_app() -> gr.Blocks:
@@ -234,7 +243,7 @@ def create_app() -> gr.Blocks:
                 result_path = pipeline.process_video(
                     input_source=input_source,
                     auto_rewrite=auto_rewrite_value,
-                    target_language=target_language_value,
+                    target_language=_normalize_target_language(target_language_value),
                     custom_voice=_map_voice_label(voice_value),
                     openrouter_api_key=gemini_api_key_value,
                     tts_engine_mode=tts_engine_mode_value or "Edge-TTS Free (Tốc độ cao)",
@@ -272,7 +281,7 @@ def create_app() -> gr.Blocks:
                 )
 
         def update_voice_choices(target_language_value: Optional[str]):
-            choices = _get_voice_choices(target_language_value)
+            choices = _get_voice_choices(_normalize_target_language(target_language_value))
             return gr.update(choices=choices, value=choices[0] if choices else None)
 
         def update_tts_controls(tts_engine_mode_value: Optional[str]):

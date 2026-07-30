@@ -104,10 +104,31 @@ class ReupPipeline:
         seconds_part, milliseconds = divmod(remainder, 1000)
         return f"{hours:02d}:{minutes:02d}:{seconds_part:02d},{milliseconds:03d}"
 
-    def _normalize_language(self, language: Optional[str]) -> str:
-        if not language:
-            return "vi"
-        return str(language).split()[0].split("(")[0].strip()
+    def _normalize_target_language(self, language: Optional[object]) -> str:
+        if isinstance(language, (set, list, tuple)):
+            language = list(language)[0] if len(language) > 0 else "vi"
+        raw = str(language or "vi").strip()
+        if not raw:
+            raw = "vi"
+        return raw.split()[0].split("(")[0].strip().lower()
+
+    def _normalize_language_for_api(self, language: Optional[object]) -> str:
+        base_code = self._normalize_target_language(language)
+        return {
+            "vi": "vi-VN",
+            "vi-vn": "vi-VN",
+            "en": "en-US",
+            "en-us": "en-US",
+            "zh": "zh-CN",
+            "zh-cn": "zh-CN",
+            "zh-tw": "zh-CN",
+            "ja": "ja-JP",
+            "ja-jp": "ja-JP",
+            "ko": "ko-KR",
+            "ko-kr": "ko-KR",
+            "th": "th-TH",
+            "th-th": "th-TH",
+        }.get(base_code, base_code)
 
     def _translate_segments(self, segments: Sequence[dict], target_language: str, api_key: Optional[str] = None) -> list[dict]:
         translated_segments: list[dict] = []
@@ -200,6 +221,9 @@ class ReupPipeline:
         try:
             logger.info("[INFO] Starting pipeline for input: %s", input_source)
 
+            target_language = self._normalize_target_language(target_language)
+            api_target_language = self._normalize_language_for_api(target_language)
+
             video_path = self._resolve_input_file(input_source)
             processed_video = Path(video_path)
             original_segments: list[dict] = []
@@ -235,7 +259,12 @@ class ReupPipeline:
             mask_video = None
             if auto_detect_subtitles or auto_remove_watermark:
                 mask_image_path = self.temp_dir / "mask.png"
-                mask_video = self.ocr_processor.build_mask_image(str(processed_video), str(mask_image_path), original_segments) if original_segments else None
+                mask_video = self.ocr_processor.build_mask_image(
+                    str(processed_video),
+                    str(mask_image_path),
+                    original_segments,
+                    auto_remove_watermark=auto_remove_watermark,
+                )
             processed_video = Path(
                 self.inpainter.clean_video(
                     str(processed_video),
@@ -263,7 +292,7 @@ class ReupPipeline:
                 raise RuntimeError("No text was extracted by OCR or transcription.")
 
             subtitle_mode = subtitle_mode.title()
-            subtitle_language = self._normalize_language(target_language)
+            subtitle_language = self._normalize_target_language(target_language)
             translated_segments = []
             if subtitle_mode in {"Translated", "Dual"} or (tts_mode == "Translated narration"):
                 logger.info("[INFO] Step 3/6: Translating OCR text to %s...", subtitle_language)
@@ -290,7 +319,7 @@ class ReupPipeline:
             if auto_rewrite:
                 try:
                     self.rewriter.set_api_key(openrouter_api_key)
-                    rewritten_text = self.rewriter.rewrite(ocr_data.get("full_text", ""), subtitle_language)
+                    rewritten_text = self.rewriter.rewrite(ocr_data.get("full_text", ""), api_target_language)
                 except Exception as exc:
                     logger.warning("AI rewrite step failed: %s", exc)
 
@@ -309,7 +338,7 @@ class ReupPipeline:
                         narration_text,
                         str(audio_output_path),
                         reference_audio_path=reference_audio_path,
-                        target_language=subtitle_language,
+                        target_language=api_target_language,
                         voice=custom_voice,
                         voice_preset=voice_preset,
                     )
@@ -321,6 +350,7 @@ class ReupPipeline:
                         str(audio_output_path),
                         voice=custom_voice,
                         engine_mode="edge",
+                        target_language=api_target_language,
                     )
                 )
 
