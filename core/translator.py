@@ -80,6 +80,28 @@ class TranslationEngine:
             logger.warning("Batch OpenRouter translation failed, falling back per-item: %s", exc)
             return [self.translate_text(text, target_language=target_language, api_key=resolved_api_key) for text in cleaned_texts]
 
+    def translate_segments(
+        self,
+        segments: Sequence[dict[str, Any]],
+        target_language: str | None = None,
+        api_key: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Translate subtitle-like segments while preserving the original start/end timecodes."""
+        texts = [str(segment.get("text", "")).strip() for segment in segments if str(segment.get("text", "")).strip()]
+        translated_texts = self.translate_batch(texts, target_language=target_language, api_key=api_key)
+
+        translated_segments: list[dict[str, Any]] = []
+        for index, segment in enumerate(segments):
+            text = str(segment.get("text", "")).strip()
+            if not text:
+                continue
+            translated_segments.append({
+                "start": float(segment.get("start", 0.0)),
+                "end": float(segment.get("end", segment.get("start", 0.0))),
+                "text": translated_texts[min(index, len(translated_texts) - 1)] if translated_texts else text,
+            })
+        return translated_segments
+
     def _translate_with_openrouter(self, text: str, target_language: str, api_key: str) -> str:
         if not api_key:
             raise RuntimeError("OpenRouter API key is required")

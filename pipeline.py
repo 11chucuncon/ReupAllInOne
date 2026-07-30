@@ -146,20 +146,19 @@ class ReupPipeline:
 
     def _translate_segments(self, segments: Sequence[dict], target_language: str, api_key: Optional[str] = None) -> list[dict]:
         translated_segments: list[dict] = []
-        for segment in segments:
-            text = str(segment.get("text", "")).strip()
-            if not text:
-                continue
-            try:
-                translated = self.translator.translate_text(text, target_language, api_key=api_key)
-            except Exception as exc:
-                logger.warning("Translation failed for segment: %s", exc)
-                translated = text
-            translated_segments.append({
-                "start": float(segment.get("start", 0.0)),
-                "end": float(segment.get("end", segment.get("start", 0.0))),
-                "text": translated,
-            })
+        try:
+            translated_segments = self.translator.translate_segments(list(segments), target_language=target_language, api_key=api_key)
+        except Exception as exc:
+            logger.warning("Translation failed for segments: %s", exc)
+            for segment in segments:
+                text = str(segment.get("text", "")).strip()
+                if not text:
+                    continue
+                translated_segments.append({
+                    "start": float(segment.get("start", 0.0)),
+                    "end": float(segment.get("end", segment.get("start", 0.0))),
+                    "text": text,
+                })
         return translated_segments
 
     def _write_srt_file(self, segments: Sequence[dict], output_path: Path) -> Path:
