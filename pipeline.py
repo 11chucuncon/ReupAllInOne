@@ -22,6 +22,31 @@ from core.subtitle_renderer import SubtitleRenderer
 logger = logging.getLogger(__name__)
 
 
+def sanitize_config(config: dict) -> dict:
+    """Normalize raw pipeline config values and ensure safe string values."""
+    clean_config: dict = {}
+    for key, value in (config or {}).items():
+        while isinstance(value, (set, tuple, list)):
+            value = list(value)[0] if len(value) > 0 else ""
+        clean_config[key] = value
+
+    lang = str(clean_config.get("target_lang", "vi")).strip().lower()
+    if "(" in lang:
+        lang = lang.split("(")[0].strip()
+
+    lang_map = {
+        "zh": "zh-CN",
+        "zh-cn": "zh-CN",
+        "zh-tw": "zh-TW",
+        "vi": "vi-VN",
+        "en": "en-US",
+        "ja": "ja-JP",
+        "ko": "ko-KR",
+    }
+    clean_config["target_lang"] = lang_map.get(lang, "zh-CN" if "zh" in lang else lang)
+    return clean_config
+
+
 class ReupPipeline:
     """Coordinate the full auto-reup video workflow."""
 
@@ -205,57 +230,40 @@ class ReupPipeline:
         except Exception as exc:
             logger.warning("Cleanup failed: %s", exc)
 
-    def process_video(
-        self,
-        input_source: Union[str, Sequence[str], None],
-        auto_rewrite: bool = True,
-        target_language: Optional[str] = "vi",
-        custom_voice: Optional[str] = None,
-        openrouter_api_key: Optional[str] = None,
-        tts_engine_mode: Optional[str] = "Edge-TTS Free (Tốc độ cao)",
-        tts_mode: Optional[str] = "Translated narration",
-        reference_audio_path: Optional[str] = None,
-        voice_preset: Optional[str] = None,
-        subtitle_mode: str = "Original",
-        inpaint_mode: str = "propainter",
-        auto_detect_subtitles: bool = True,
-        auto_remove_watermark: bool = True,
-        subtitle_font: Optional[str] = "DejaVu Sans",
-        subtitle_size: int = 32,
-        subtitle_color: str = "#FFFFFF",
-        subtitle_outline_color: str = "#000000",
-        subtitle_position: str = "bottom",
-        output_mode: str = "Keep original",
-        enable_upscale: bool = False,
-        upscale_factor: str = "2x (1080p Full HD)",
-        speed_factor: float = 1.05,
-        hflip: bool = True,
-        background_audio_path: Optional[str] = None,
-    ) -> str:
-        """Run the full video reup pipeline and return the output video path."""
+    def process_video(self, config: dict) -> str:
+        """Run the full video reup pipeline using a sanitized config dictionary."""
         try:
-            logger.info("[INFO] Starting pipeline for input: %s", input_source)
+            config = sanitize_config(config or {})
+            logger.info("[INFO] Starting pipeline with config: %s", config)
 
-            if isinstance(target_language, (set, list, tuple)):
-                target_language = list(target_language)[0] if len(target_language) > 0 else "vi"
-            target_language = str(target_language or "vi").strip().lower()
-            if "(" in target_language:
-                target_language = target_language.split("(")[0].strip()
-            lang_map = {
-                "zh": "zh-CN",
-                "zh-cn": "zh-CN",
-                "zh-tw": "zh-TW",
-                "vi": "vi-VN",
-                "en": "en-US",
-                "ja": "ja-JP",
-                "ko": "ko-KR",
-            }
-            target_language = lang_map.get(target_language, target_language)
+            target_language = config.get("target_lang", "vi")
             api_target_language = self._normalize_language_for_api(target_language)
-
-            video_path = self._resolve_input_file(input_source)
+            video_path = self._resolve_input_file(config.get("input_source"))
             processed_video = Path(video_path)
             original_segments: list[dict] = []
+
+            auto_rewrite = bool(config.get("auto_rewrite", True))
+            custom_voice = config.get("custom_voice")
+            openrouter_api_key = config.get("openrouter_api_key")
+            tts_engine_mode = config.get("tts_engine_mode", "Edge-TTS Free (Tốc độ cao)")
+            tts_mode = config.get("tts_mode", "Translated narration")
+            reference_audio_path = config.get("reference_audio_path")
+            voice_preset = config.get("voice_preset")
+            subtitle_mode = str(config.get("subtitle_mode", "Original"))
+            inpaint_mode = str(config.get("inpaint_mode", "propainter"))
+            auto_detect_subtitles = bool(config.get("auto_detect_subtitles", True))
+            auto_remove_watermark = bool(config.get("auto_remove_watermark", True))
+            subtitle_font = config.get("subtitle_font", "DejaVu Sans")
+            subtitle_size = int(config.get("subtitle_size", 32) or 32)
+            subtitle_color = config.get("subtitle_color", "#FFFFFF")
+            subtitle_outline_color = config.get("subtitle_outline_color", "#000000")
+            subtitle_position = str(config.get("subtitle_position", "bottom"))
+            output_mode = str(config.get("output_mode", "Keep original"))
+            enable_upscale = bool(config.get("enable_upscale", False))
+            upscale_factor = str(config.get("upscale_factor", "2x (1080p Full HD)"))
+            speed_factor = float(config.get("speed_factor", 1.05) or 1.05)
+            hflip = bool(config.get("hflip", True))
+            background_audio_path = config.get("background_audio_path")
 
             logger.info("[INFO] Step 1/6: Detecting on-screen text with OCR...")
             ocr_data = self.ocr_processor.detect_text(str(processed_video))
