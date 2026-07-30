@@ -12,7 +12,16 @@ from urllib.request import urlretrieve
 import torch
 
 
-ROOT = Path(__file__).resolve().parent
+def resolve_project_root(start_path: Path) -> Path:
+    """Locate the real project root by walking upward until the app entrypoints are found."""
+    current_path = start_path.expanduser().resolve()
+    for candidate in [current_path, *current_path.parents]:
+        if (candidate / "app_gradio.py").exists() and (candidate / "pipeline.py").exists() and (candidate / "config").exists():
+            return candidate
+    return current_path
+
+
+ROOT = resolve_project_root(Path(__file__).resolve().parent)
 TEMP_DIR = ROOT / "temp"
 OUTPUT_DIR = ROOT / "outputs"
 

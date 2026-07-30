@@ -110,12 +110,20 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
         """Render a reup video with optional flipping, speed changes, audio replacement, subtitles, and ratio adjustments."""
         input_video = Path(video_path).expanduser().resolve()
         input_audio = Path(new_audio_path).expanduser().resolve()
-        output_file = safe_file_path(output_path)
+        output_file = Path(output_path).expanduser().resolve()
+
+        if input_video == output_file:
+            logger.error("FFmpeg input video path must not be the same as the final output path: %s", input_video)
+            raise ValueError("The input video path must be the cleaned/original video file, not the final output file.")
 
         if not input_video.exists():
+            logger.error("FFmpeg input video file is missing: %s", input_video)
             raise FileNotFoundError(f"Input video not found: {video_path}")
         if not input_audio.exists():
+            logger.error("FFmpeg input audio file is missing: %s", input_audio)
             raise FileNotFoundError(f"Input audio not found: {new_audio_path}")
+
+        output_file = safe_file_path(output_file)
 
         command = ["ffmpeg", "-y", "-i", str(input_video), "-i", str(input_audio)]
         vf_parts = []

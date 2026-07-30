@@ -406,9 +406,10 @@ class ReupPipeline:
                 discovered_audio_path = promote_file_to_destination(discovered_audio_path, self.audio_output_path, search_root=self.temp_dir, move=True)
 
             logger.info("[INFO] Step 5/6: Burning subtitles into video...")
+            subtitle_output_video = self.temp_dir / "subtitled_video.mp4"
             rendered_subtitle_video = self.subtitle_renderer.render_subtitles(
                 str(processed_video),
-                str(self.final_video_path),
+                str(subtitle_output_video),
                 str(self.subtitle_srt_path),
                 subtitle_mode.lower(),
                 subtitle_style,
