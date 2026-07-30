@@ -188,6 +188,129 @@ class ReupPipeline:
             })
         return translated_segments
 
+    def _build_segment_text(
+        self,
+        segment: dict,
+        translated_segments: list[dict],
+        tts_mode: str,
+    ) -> str:
+        if tts_mode == "Translated narration" and translated_segments:
+            matching = next(
+                (item for item in translated_segments if float(item.get("start", 0.0)) == float(segment.get("start", 0.0)) and float(item.get("end", 0.0)) == float(segment.get("end", 0.0))),
+                None,
+            )
+            if matching:
+                return str(matching.get("text", "")).strip()
+
+        return str(segment.get("text", "")).strip()
+
+    def _generate_segment_audio(
+        self,
+        segment_index: int,
+        text: str,
+        audio_path: Path,
+        target_language: str,
+        tts_engine_mode: str,
+        custom_voice: Optional[str],
+        reference_audio_path: Optional[str],
+        voice_preset: Optional[str],
+    ) -> str:
+        if not text:
+            raise ValueError("Segment text cannot be empty for TTS generation")
+        if str(tts_engine_mode or "").lower().startswith("local"):
+            asyncio.run(
+                self.tts_engine.clone_speech(
+                    text,
+                    str(audio_path),
+                    reference_audio_path=reference_audio_path,
+                    target_language=target_language,
+                    voice=custom_voice,
+                    voice_preset=voice_preset,
+                )
+            )
+        else:
+            asyncio.run(
+                self.tts_engine.generate_speech(
+                    text,
+                    str(audio_path),
+                    voice=custom_voice,
+                    engine_mode="edge",
+                    target_language=target_language,
+                )
+            )
+        return str(audio_path)
+
+    def _build_dubbed_audio(
+        self,
+        segments: list[dict],
+        translated_segments: list[dict],
+        tts_mode: str,
+        api_target_language: str,
+        tts_engine_mode: str,
+        custom_voice: Optional[str],
+        reference_audio_path: Optional[str],
+        voice_preset: Optional[str],
+    ) -> str:
+        if not segments:
+            raise RuntimeError("No segments available for dubbing audio generation")
+
+        piece_paths: list[Path] = []
+        last_end = 0.0
+
+        for index, segment in enumerate(segments, start=1):
+            start = float(segment.get("start", 0.0))
+            end = float(segment.get("end", start))
+            duration = max(0.0, end - start)
+            text = self._build_segment_text(segment, translated_segments, tts_mode)
+
+            if start > last_end + 0.01:
+                silence_path = self.temp_dir / f"silence_{index:04d}.mp3"
+                self.ffmpeg_processor.create_silence(duration=(start - last_end), output_path=str(silence_path))
+                piece_paths.append(silence_path)
+
+            if duration <= 0 or not text:
+                if duration > 0:
+                    silence_path = self.temp_dir / f"segment_silence_{index:04d}.mp3"
+                    self.ffmpeg_processor.create_silence(duration=duration, output_path=str(silence_path))
+                    piece_paths.append(silence_path)
+                last_end = end
+                continue
+
+            segment_audio_path = self.temp_dir / f"segment_{index:04d}.mp3"
+            self._generate_segment_audio(
+                index,
+                text,
+                segment_audio_path,
+                api_target_language,
+                tts_engine_mode,
+                custom_voice,
+                reference_audio_path,
+                voice_preset,
+            )
+
+            try:
+                raw_duration = self.ffmpeg_processor.get_media_duration(str(segment_audio_path))
+                if raw_duration > 0 and duration > 0 and abs(raw_duration - duration) > 0.05:
+                    adjusted_path = self.temp_dir / f"segment_{index:04d}_adjusted.mp3"
+                    speed_ratio = raw_duration / duration
+                    self.ffmpeg_processor.adjust_audio_speed(
+                        str(segment_audio_path),
+                        str(adjusted_path),
+                        speed_ratio,
+                    )
+                    piece_paths.append(adjusted_path)
+                else:
+                    piece_paths.append(Path(segment_audio_path))
+            except Exception as exc:
+                logger.warning("Segment %s audio adjustment failed: %s", index, exc)
+                piece_paths.append(Path(segment_audio_path))
+
+            last_end = end
+
+        final_dubbed_audio = self.temp_dir / "dubbed_audio.mp3"
+        self.ffmpeg_processor.concatenate_audio(piece_paths, str(final_dubbed_audio))
+        return str(final_dubbed_audio)
+
     def _write_srt_file(self, segments: Sequence[dict], output_path: Path) -> Path:
         """Write transcription segments to a .srt file in the temp directory."""
         output_file = Path(output_path)
@@ -374,43 +497,17 @@ class ReupPipeline:
             )
             narration_text = narration_text.strip() or ocr_data.get("full_text", "")
 
-            audio_output_path = self.temp_dir / "new_voice.mp3"
-            logger.info("[INFO] Step 4/6: Generating narration audio...")
-            if str(tts_engine_mode or "").lower().startswith("local"):
-                asyncio.run(
-                    self.tts_engine.clone_speech(
-                        narration_text,
-                        str(audio_output_path),
-                        reference_audio_path=reference_audio_path,
-                        target_language=api_target_language,
-                        voice=custom_voice,
-                        voice_preset=voice_preset,
-                    )
-                )
-            else:
-                asyncio.run(
-                    self.tts_engine.generate_speech(
-                        narration_text,
-                        str(audio_output_path),
-                        voice=custom_voice,
-                        engine_mode="edge",
-                        target_language=api_target_language,
-                    )
-                )
-
-            try:
-                audio_duration = self.ffmpeg_processor.get_media_duration(str(audio_output_path))
-                target_duration = original_segments[-1]["end"] if original_segments else None
-                if target_duration and audio_duration > 0 and abs(audio_duration - target_duration) > 0.05:
-                    adjusted_audio_path = self.temp_dir / "new_voice_timesync.mp3"
-                    self.ffmpeg_processor.adjust_audio_speed(
-                        str(audio_output_path),
-                        str(adjusted_audio_path),
-                        audio_duration / target_duration,
-                    )
-                    audio_output_path = adjusted_audio_path
-            except Exception as exc:
-                logger.warning("Audio time-sync adjustment failed: %s", exc)
+            logger.info("[INFO] Step 4/6: Generating dubbed narration audio by segment...")
+            audio_output_path = self._build_dubbed_audio(
+                original_segments,
+                translated_segments,
+                tts_mode,
+                api_target_language,
+                tts_engine_mode,
+                custom_voice,
+                reference_audio_path,
+                voice_preset,
+            )
 
             logger.info("[INFO] Step 5/6: Burning subtitles into video...")
             styled_video_path = self.temp_dir / "styled_video.mp4"

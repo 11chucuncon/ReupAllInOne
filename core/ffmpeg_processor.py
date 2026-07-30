@@ -270,3 +270,70 @@ Dialogue: 0,0:00:00.00,0:10:00.00,Default,,10,10,{margin_v},,{{\\an{alignment}}}
         except subprocess.CalledProcessError as exc:
             logger.exception("Audio speed adjustment failed: %s", exc.stderr)
             raise RuntimeError(f"Audio speed adjustment failed: {exc.stderr}") from exc
+
+    def create_silence(self, duration: float, output_path: str) -> str:
+        """Create a silent audio file with the requested duration."""
+        output_file = Path(output_path).expanduser().resolve()
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        if duration <= 0.0:
+            raise ValueError("Silence duration must be positive")
+        command = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anullsrc=cl=mono:r=44100",
+            "-t",
+            f"{duration:.3f}",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            str(output_file),
+        ]
+        ffmpeg_command = " ".join(shlex.quote(part) for part in command)
+        logger.info("Running FFmpeg silence creation: %s", ffmpeg_command)
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            return str(output_file)
+        except subprocess.CalledProcessError as exc:
+            logger.exception("Silence creation failed: %s", exc.stderr)
+            raise RuntimeError(f"Silence creation failed: {exc.stderr}") from exc
+
+    def concatenate_audio(self, audio_paths: list[Path], output_path: str) -> str:
+        """Concatenate multiple audio files into a single output file."""
+        output_file = Path(output_path).expanduser().resolve()
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        if not audio_paths:
+            raise ValueError("No audio files provided for concatenation")
+
+        concat_list = output_file.with_suffix(".txt")
+        with concat_list.open("w", encoding="utf-8") as handle:
+            for path in audio_paths:
+                handle.write(f"file '{path.as_posix()}'\n")
+
+        command = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_list),
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            str(output_file),
+        ]
+        ffmpeg_command = " ".join(shlex.quote(part) for part in command)
+        logger.info("Running FFmpeg audio concatenation: %s", ffmpeg_command)
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            concat_list.unlink(missing_ok=True)
+            return str(output_file)
+        except subprocess.CalledProcessError as exc:
+            logger.exception("Audio concatenation failed: %s", exc.stderr)
+            raise RuntimeError(f"Audio concatenation failed: {exc.stderr}") from exc
