@@ -47,17 +47,17 @@ class TranslationEngine:
 
         if self.provider in {"openrouter", "llm", "deepseek"}:
             if not configured_model:
-                return "deepseek/deepseek-chat"
+                return "deepseek/deepseek-v4-flash"
             normalized = configured_model.lower()
             if "opus-mt" in normalized or "huggingface" in normalized or normalized.startswith("helsinki"):
                 logger.warning(
-                    "Detected a Hugging Face-style translation model '%s'; using OpenRouter model 'deepseek/deepseek-chat' instead.",
+                    "Detected a Hugging Face-style translation model '%s'; using OpenRouter model 'deepseek/deepseek-v4-flash' instead.",
                     configured_model,
                 )
-                return "deepseek/deepseek-chat"
+                return "deepseek/deepseek-v4-flash"
             return configured_model
 
-        return configured_model or "deepseek/deepseek-chat"
+        return configured_model or "deepseek/deepseek-v4-flash"
 
     def translate_text(self, text: str, target_language: str | None = None, api_key: str | None = None) -> str:
         """Translate a single text chunk with OpenRouter and graceful fallback."""
