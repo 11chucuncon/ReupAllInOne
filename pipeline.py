@@ -226,6 +226,11 @@ class ReupPipeline:
         output_mode: str = "Keep original",
         enable_upscale: bool = False,
         upscale_factor: str = "2x (1080p Full HD)",
+        propainter_subvideo_length: int = 30,
+        propainter_raft_iter: int = 10,
+        propainter_resize_max_side: int = 1280,
+        propainter_fp16: bool = True,
+        propainter_enable_vram_cleanup: bool = True,
         speed_factor: float = 1.05,
         hflip: bool = True,
         background_audio_path: Optional[str] = None,
@@ -261,6 +266,11 @@ class ReupPipeline:
                     str(processed_video),
                     str(output_clean),
                     mode=inpaint_mode,
+                    subvideo_length=propainter_subvideo_length,
+                    raft_iter=propainter_raft_iter,
+                    resize_max_side=propainter_resize_max_side,
+                    fp16=propainter_fp16,
+                    enable_vram_cleanup=propainter_enable_vram_cleanup,
                 )
             )
 

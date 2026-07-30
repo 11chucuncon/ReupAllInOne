@@ -216,6 +216,29 @@ def create_app() -> gr.Blocks:
                     choices=["2x (1080p Full HD)", "4x (4K Ultra HD)"],
                     value="2x (1080p Full HD)",
                 )
+                propainter_subvideo_length = gr.Slider(
+                    label="ProPainter chunk length (VRAM-safe)",
+                    minimum=20,
+                    maximum=80,
+                    value=30,
+                    step=5,
+                )
+                propainter_raft_iter = gr.Slider(
+                    label="ProPainter RAFT iterations",
+                    minimum=4,
+                    maximum=20,
+                    value=10,
+                    step=2,
+                )
+                propainter_resize_max_side = gr.Slider(
+                    label="Max frame side for ProPainter",
+                    minimum=720,
+                    maximum=1600,
+                    value=1280,
+                    step=80,
+                )
+                propainter_fp16 = gr.Checkbox(label="Use FP16 (lower VRAM)", value=True)
+                propainter_cleanup_vram = gr.Checkbox(label="Free VRAM before inference", value=True)
                 speed_slider = gr.Slider(label="Video Speed", minimum=0.8, maximum=1.5, value=1.05, step=0.01)
                 hflip_checkbox = gr.Checkbox(label="Flip horizontally", value=True)
                 background_audio = gr.File(label="Background Music (optional)", file_types=[".mp3", ".wav", ".m4a"])
@@ -243,6 +266,11 @@ def create_app() -> gr.Blocks:
             output_ratio_value: Optional[str],
             enable_upscale_value: bool,
             upscale_factor_value: Optional[str],
+            propainter_subvideo_length_value: Optional[float],
+            propainter_raft_iter_value: Optional[float],
+            propainter_resize_max_side_value: Optional[float],
+            propainter_fp16_value: bool,
+            propainter_cleanup_vram_value: bool,
             speed_value: Optional[float],
             hflip_value: Optional[bool],
             background_audio_value,
@@ -278,6 +306,11 @@ def create_app() -> gr.Blocks:
                     output_mode=output_ratio_value or "Keep original",
                     enable_upscale=bool(enable_upscale_value),
                     upscale_factor=upscale_factor_value or "2x (1080p Full HD)",
+                    propainter_subvideo_length=int(propainter_subvideo_length_value or 30),
+                    propainter_raft_iter=int(propainter_raft_iter_value or 10),
+                    propainter_resize_max_side=int(propainter_resize_max_side_value or 1280),
+                    propainter_fp16=bool(propainter_fp16_value),
+                    propainter_enable_vram_cleanup=bool(propainter_cleanup_vram_value),
                     speed_factor=float(speed_value or 1.05),
                     hflip=bool(hflip_value),
                     background_audio_path=background_audio_value[0] if isinstance(background_audio_value, (list, tuple)) and background_audio_value else None,
@@ -340,6 +373,11 @@ def create_app() -> gr.Blocks:
                 output_ratio,
                 enable_upscale,
                 upscale_factor,
+                propainter_subvideo_length,
+                propainter_raft_iter,
+                propainter_resize_max_side,
+                propainter_fp16,
+                propainter_cleanup_vram,
                 speed_slider,
                 hflip_checkbox,
                 background_audio,

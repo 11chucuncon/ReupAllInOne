@@ -93,7 +93,7 @@ class VideoInpainter:
 
         return torch.stack(frames), float(fps), (width, height), str(video_path)
 
-    def _get_propaint_resize_args(self, input_video_path: str) -> list[str]:
+    def _get_propaint_resize_args(self, input_video_path: str, resize_max_side: int = 1280) -> list[str]:
         capture = cv2.VideoCapture(input_video_path)
         if not capture.isOpened():
             logger.warning("Could not inspect video dimensions for ProPainter resize; skipping resize cap")
@@ -109,14 +109,24 @@ class VideoInpainter:
             return []
 
         max_side = max(width, height)
-        if max_side <= 1280:
+        if max_side <= resize_max_side:
             return []
 
         if width >= height:
-            return ["--width", str(1280)]
-        return ["--height", str(1280)]
+            return ["--width", str(resize_max_side)]
+        return ["--height", str(resize_max_side)]
 
-    def _build_propaint_runner(self, input_video_path: str, mask_video_path: str, output_path: str) -> str:
+    def _build_propaint_runner(
+        self,
+        input_video_path: str,
+        mask_video_path: str,
+        output_path: str,
+        subvideo_length: int = 30,
+        raft_iter: int = 10,
+        resize_max_side: int = 1280,
+        fp16: bool = True,
+        enable_vram_cleanup: bool = True,
+    ) -> str:
         script_path = self.propainter_dir / "inference_propainter.py"
         args = [
             str(script_path),
@@ -129,12 +139,12 @@ class VideoInpainter:
             "--mask_dilation",
             str(self.inpaint_config.get("mask_dilation", 8)),
             "--subvideo_length",
-            str(self.inpaint_config.get("subvideo_length", 30)),
+            str(subvideo_length or self.inpaint_config.get("subvideo_length", 30)),
             "--raft_iter",
-            str(self.inpaint_config.get("raft_iter", 10)),
+            str(raft_iter or self.inpaint_config.get("raft_iter", 10)),
         ]
-        args.extend(self._get_propaint_resize_args(input_video_path))
-        if self.inpaint_config.get("fp16", False):
+        args.extend(self._get_propaint_resize_args(input_video_path, resize_max_side=resize_max_side))
+        if fp16 or self.inpaint_config.get("fp16", False):
             args.append("--fp16")
 
         wrapper_code = textwrap.dedent(
@@ -200,16 +210,36 @@ class VideoInpainter:
                 return vframes, fps, (height, width), str(video_path)
 
             torchvision.io.read_video = custom_read_video
-            gc.collect()
-            torch.cuda.empty_cache()
+            if {str(enable_vram_cleanup).lower()}:
+                gc.collect()
+                torch.cuda.empty_cache()
             sys.argv = {json.dumps(args)}
             runpy.run_path({json.dumps(str(script_path))}, run_name='__main__')
             """
         )
         return wrapper_code
 
-    def _run_propaint_inference(self, input_video_path: str, mask_video_path: str, output_path: str) -> None:
-        wrapper_code = self._build_propaint_runner(input_video_path, mask_video_path, str(output_path))
+    def _run_propaint_inference(
+        self,
+        input_video_path: str,
+        mask_video_path: str,
+        output_path: str,
+        subvideo_length: int = 30,
+        raft_iter: int = 10,
+        resize_max_side: int = 1280,
+        fp16: bool = True,
+        enable_vram_cleanup: bool = True,
+    ) -> None:
+        wrapper_code = self._build_propaint_runner(
+            input_video_path,
+            mask_video_path,
+            str(output_path),
+            subvideo_length=subvideo_length,
+            raft_iter=raft_iter,
+            resize_max_side=resize_max_side,
+            fp16=fp16,
+            enable_vram_cleanup=enable_vram_cleanup,
+        )
         self._run_command([sys.executable, "-c", wrapper_code], cwd=self.propainter_dir)
 
     def _blur_video(self, input_video_path: str, output_video_path: str) -> str:
@@ -269,6 +299,11 @@ class VideoInpainter:
         output_video_path: str,
         mode: str = "propainter",
         mask_video_path: Optional[str] = None,
+        subvideo_length: int = 30,
+        raft_iter: int = 10,
+        resize_max_side: int = 1280,
+        fp16: bool = True,
+        enable_vram_cleanup: bool = True,
     ) -> str:
         output_path = Path(output_video_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -285,5 +320,14 @@ class VideoInpainter:
         else:
             mask_video_path = self._prepare_mask_sequence_directory(mask_video_path, str(output_path.parent / "propainter_masks_dir"))
 
-        self._run_propaint_inference(input_video_path, mask_video_path, str(output_path))
+        self._run_propaint_inference(
+            input_video_path,
+            mask_video_path,
+            str(output_path),
+            subvideo_length=subvideo_length,
+            raft_iter=raft_iter,
+            resize_max_side=resize_max_side,
+            fp16=fp16,
+            enable_vram_cleanup=enable_vram_cleanup,
+        )
         return str(output_path)
