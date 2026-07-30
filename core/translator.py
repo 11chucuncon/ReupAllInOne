@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -63,13 +64,16 @@ class TranslationEngine:
         return self._translate_with_google_fallback(str(text).strip(), target_language)
 
     def translate_batch(self, texts: Sequence[str], target_language: str | None = None, api_key: str | None = None) -> list[str]:
-        """Translate a list of texts in a single request when possible."""
+        """Translate a list of texts in a single request using a JSON-array batch prompt."""
         cleaned_texts = [str(text).strip() for text in texts if str(text).strip()]
         if not cleaned_texts:
             return []
 
         if len(cleaned_texts) == 1:
             return [self.translate_text(cleaned_texts[0], target_language=target_language, api_key=api_key)]
+
+        if not self._should_use_batch(cleaned_texts):
+            return [self.translate_text(text, target_language=target_language, api_key=api_key) for text in cleaned_texts]
 
         target_language = target_language or self.target_language
         resolved_api_key = api_key or self.api_key or os.environ.get("OPENROUTER_API_KEY") or ""
@@ -101,6 +105,15 @@ class TranslationEngine:
                 "text": translated_texts[min(index, len(translated_texts) - 1)] if translated_texts else text,
             })
         return translated_segments
+
+    def _should_use_batch(self, texts: Sequence[str]) -> bool:
+        """Return True only for a compact batch payload that is likely to succeed."""
+        if len(texts) > 8:
+            return False
+        if any(len(text) > 700 for text in texts):
+            return False
+        total_chars = sum(len(text) for text in texts)
+        return total_chars <= 3000
 
     def _translate_with_openrouter(self, text: str, target_language: str, api_key: str) -> str:
         if not api_key:
@@ -135,7 +148,9 @@ class TranslationEngine:
             json=payload,
             timeout=60,
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise RuntimeError(f"OpenRouter request failed ({response.status_code}): {response.text[:500]}")
+
         data = response.json()
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         if not content:
@@ -146,20 +161,22 @@ class TranslationEngine:
         if not api_key:
             raise RuntimeError("OpenRouter API key is required")
 
-        joined_input = "\n".join(f"{index}. {text}" for index, text in enumerate(texts, start=1))
+        payload_text = [{"id": index + 1, "text": text} for index, text in enumerate(texts)]
         payload = {
             "model": self.openrouter_model,
             "messages": [
                 {
                     "role": "system",
                     "content": (
-                        "You are a professional video translator. Translate each provided line into natural, fluent "
-                        f"{self._display_language_name(target_language)} suitable for voiceover/dubbing. "
-                        "Keep each translation concise. Return exactly the same number of lines as the input. "
-                        "Each output line must contain only the translated text for the corresponding input line."
+                        "You are a video subtitle translator. Translate the array of texts into natural "
+                        f"{self._display_language_name(target_language)}. Maintain context and tone across all lines. "
+                        "Return ONLY a JSON list of translated strings with the exact same order and length."
                     ),
                 },
-                {"role": "user", "content": f"Translate the following lines:\n{joined_input}"},
+                {
+                    "role": "user",
+                    "content": f"Translate this JSON array of subtitles:\n{payload_text}",
+                },
             ],
             "temperature": 0.2,
             "max_tokens": 2048,
@@ -176,16 +193,35 @@ class TranslationEngine:
             json=payload,
             timeout=60,
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise RuntimeError(f"OpenRouter batch request failed ({response.status_code}): {response.text[:500]}")
+
         data = response.json()
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         if not content:
             raise RuntimeError("OpenRouter batch translation returned an empty response")
 
-        lines = [line.strip() for line in str(content).splitlines() if line.strip()]
-        if len(lines) == len(texts):
-            return lines
-        return [self._translate_with_openrouter(text, target_language, api_key) for text in texts]
+        parsed = self._parse_json_translation_response(content)
+        if parsed is None:
+            raise RuntimeError("OpenRouter batch response was not valid JSON")
+        if len(parsed) != len(texts):
+            raise RuntimeError("OpenRouter batch response length did not match input size")
+        return [str(item).strip() for item in parsed]
+
+    def _parse_json_translation_response(self, content: str) -> Optional[list[str]]:
+        """Parse a JSON array returned by the LLM and normalize it into a list of strings."""
+        try:
+            text = str(content).strip()
+            if text.startswith("```"):
+                text = text.strip("`").strip()
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except Exception as exc:
+            logger.warning("Could not parse OpenRouter JSON batch response: %s", exc)
+        return None
 
     def _translate_with_google_fallback(self, text: str, target_language: str) -> str:
         try:
